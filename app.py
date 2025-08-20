@@ -17,7 +17,7 @@ timeframes = {
     "1 Day (Intraday 5m)": "1d"
 }
 choice = st.sidebar.selectbox("Select timeframe:", list(timeframes.keys()))
-autorefresh = st.sidebar.checkbox("Auto-refresh intraday (30s)", value=False)
+
 
 @st.cache_data(ttl=60) 
 def get_prices(period: str) -> pd.DataFrame:
