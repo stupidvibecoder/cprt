@@ -3,3 +3,5 @@ yfinance>=0.2.40
 matplotlib>=3.8
 pandas>=2.2
 numpy>=1.26
+plotly>=5.22
+streamlit-plotly-events>=0.0.6
