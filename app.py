@@ -28,7 +28,7 @@ def get_prices(period: str) -> pd.DataFrame:
         return ticker.history(period=period, auto_adjust=True)
 
 if choice == "1 Day (Intraday 5m)" and autorefresh:
-    st.experimental_rerun 
+   
     st.experimental_set_query_params() 
     st.autorefresh(interval=30_000, key="refresh")
 
