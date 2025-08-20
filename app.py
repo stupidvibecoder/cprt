@@ -28,9 +28,8 @@ def get_prices(period: str) -> pd.DataFrame:
         df = t.history(period="1d", interval="5m", auto_adjust=True)
     else:
         df = t.history(period=period, auto_adjust=True)
-    # yfinance returns a DatetimeIndex; keep both index and a column for Plotly
     df = df.copy()
-    df["ts"] = df.index
+    df["ts"] = df.index  # explicit column for Plotly
     return df
 
 period = timeframes[choice]
@@ -46,32 +45,35 @@ if data.empty:
 fig = go.Figure()
 fig.add_trace(
     go.Scatter(
-        x=data["ts"], y=data["Close"],
-        mode="lines", name="Close"
+        x=data["ts"],
+        y=data["Close"],
+        mode="lines",
+        name="Close",
     )
 )
 fig.update_layout(
     title=f"CPRT - {choice}",
     xaxis_title="Date/Time",
     yaxis_title="Price ($)",
-    hovermode="x unified",                # vertical crosshair + unified tooltip
-    xaxis=dict(rangeslider=dict(visible=True)),  # adds draggable range slider
+    hovermode="x unified",
+    xaxis=dict(rangeslider=dict(visible=True)),
     margin=dict(l=40, r=20, t=60, b=40),
 )
 
-# ---- Render & capture hover events ----
+# ---- Render & capture hover events (use hover_event=True) ----
 hover_points = plotly_events(
     fig,
-    events=["hover"],          # listen to hover
+    click_event=False,
     select_event=False,
+    hover_event=True,
     override_width="100%",
     override_height=520,
 )
 
-# ---- Bottom-left readout for hovered price ----
+# ---- Hover readout (bottom-left under the chart) ----
 if hover_points:
-    x_val = hover_points[-1]["x"]          # ISO datetime string
-    y_val = hover_points[-1]["y"]          # price
+    x_val = hover_points[-1]["x"]          # timestamp (str)
+    y_val = float(hover_points[-1]["y"])   # price (float)
     st.markdown(
         f"<div style='font-family:monospace; font-size:14px;'>"
         f"<b>Hover</b> ⟶ {x_val} · <b>${y_val:,.2f}</b>"
@@ -84,12 +86,11 @@ else:
         unsafe_allow_html=True,
     )
 
-# ---- Show high and low for the selected period ----
+# ---- High/Low for the selected period ----
 high_price = data["Close"].max()
 low_price = data["Close"].min()
-
 st.markdown(
-    f"<div style='font-size:14px;'>"
+    f"<div style='font-size:14px; margin-top:4px;'>"
     f"<b>High:</b> ${high_price:,.2f} &nbsp;&nbsp;|&nbsp;&nbsp; "
     f"<b>Low:</b> ${low_price:,.2f}"
     f"</div>",
