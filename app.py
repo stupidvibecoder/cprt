@@ -4,64 +4,90 @@ import yfinance as yf
 import plotly.graph_objs as go
 from streamlit_plotly_events import plotly_events
 
+# ---------- Page ----------
 st.set_page_config(page_title="Copart (CPRT) Stock Chart", layout="wide")
 st.title("Copart (CPRT) Stock Chart")
 
-# ---- Controls ----
-timeframes = {
-    "All Time": "max",
-    "5 Years": "5y",
-    "1 Year": "1y",
-    "6 Months": "6mo",
-    "3 Months": "3mo",
-    "1 Month": "1mo",
-    "1 Week": "5d",
-    "1 Day (Intraday 5m)": "1d",
+# ---------- Controls ----------
+TIMEFRAMES = {
+    "All Time": ("max", "1wk"),
+    "5 Years": ("5y", "1d"),
+    "1 Year": ("1y", "1d"),
+    "6 Months": ("6mo", "1h"),
+    "3 Months": ("3mo", "1h"),
+    "1 Month": ("1mo", "30m"),
+    "1 Week": ("7d", "30m"),
+    "1 Day (Intraday)": ("1d", "1m"),  # 1m works only for the most recent ~7 days
 }
-choice = st.sidebar.selectbox("Select timeframe:", list(timeframes.keys()))
-autorefresh = st.sidebar.checkbox("Auto-refresh intraday (30s)", value=False)
+tf_label = st.sidebar.selectbox("Select timeframe:", list(TIMEFRAMES.keys()))
+period, interval = TIMEFRAMES[tf_label]
 
-@st.cache_data(ttl=60)
-def get_prices(period: str) -> pd.DataFrame:
-    t = yf.Ticker("CPRT")
-    if period == "1d":
-        df = t.history(period="1d", interval="5m", auto_adjust=True)
-    else:
-        df = t.history(period=period, auto_adjust=True)
-    df = df.copy()
-    df["ts"] = df.index  # explicit column for Plotly
+autorefresh = False
+if tf_label == "1 Day (Intraday)":
+    autorefresh = st.sidebar.checkbox("Auto-refresh intraday (30s)", value=False)
+
+# ---------- Data ----------
+@st.cache_data(show_spinner=False)
+def get_prices(period: str, interval: str) -> pd.DataFrame:
+    """
+    Use yfinance.download for reliability/perf.
+    auto_adjust=True gives split/div adjusted close.
+    """
+    df = yf.download(
+        "CPRT",
+        period=period,
+        interval=interval,
+        auto_adjust=True,
+        progress=False,
+        threads=True,
+    )
+    if df.empty:
+        return df
+    # Normalize columns across intervals
+    df = df.rename(columns=str.title)
+    # Ensure tz-naive for Plotly
+    if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
+        df.index = df.index.tz_convert(None)
+    df["ts"] = df.index
     return df
 
-period = timeframes[choice]
-if period == "1d" and autorefresh:
-    st.autorefresh(interval=30_000, key="refresh")
+# Auto refresh intraday
+if autorefresh:
+    st.autorefresh(interval=30_000, key="refresh_intraday")
 
-data = get_prices(period)
+with st.spinner("Loading CPRT prices…"):
+    data = get_prices(period, interval)
+
 if data.empty:
-    st.warning("No data returned from Yahoo Finance. Try a different timeframe.")
+    st.error("No data returned from Yahoo Finance for this timeframe. Try another.")
     st.stop()
 
-# ---- Plotly figure ----
+# ---------- Plot (Plotly WebGL for speed) ----------
 fig = go.Figure()
+
 fig.add_trace(
-    go.Scatter(
+    go.Scattergl(
         x=data["ts"],
         y=data["Close"],
         mode="lines",
         name="Close",
+        hovertemplate="%{x|%Y-%m-%d %H:%M}<br>$%{y:.2f}<extra></extra>",
     )
 )
+
+# Add a (lightweight) rangeslider for longer windows
+show_slider = tf_label not in ("1 Day (Intraday)", "1 Week")
 fig.update_layout(
-    title=f"CPRT - {choice}",
+    title=f"CPRT - {tf_label}",
     xaxis_title="Date/Time",
     yaxis_title="Price ($)",
     hovermode="x unified",
-    xaxis=dict(rangeslider=dict(visible=True)),
+    xaxis=dict(rangeslider=dict(visible=show_slider)),
     margin=dict(l=40, r=20, t=60, b=40),
 )
 
-# ---- Render & capture hover events (use hover_event=True) ----
-hover_points = plotly_events(
+# ---------- Hover readout (bottom-left, outside chart) ----------
+hover_pts = plotly_events(
     fig,
     click_event=False,
     select_event=False,
@@ -70,10 +96,9 @@ hover_points = plotly_events(
     override_height=520,
 )
 
-# ---- Hover readout (bottom-left under the chart) ----
-if hover_points:
-    x_val = hover_points[-1]["x"]          # timestamp (str)
-    y_val = float(hover_points[-1]["y"])   # price (float)
+if hover_pts:
+    x_val = hover_pts[-1]["x"]
+    y_val = float(hover_pts[-1]["y"])
     st.markdown(
         f"<div style='font-family:monospace; font-size:14px;'>"
         f"<b>Hover</b> ⟶ {x_val} · <b>${y_val:,.2f}</b>"
@@ -86,13 +111,18 @@ else:
         unsafe_allow_html=True,
     )
 
-# ---- High/Low for the selected period ----
-high_price = data["Close"].max()
-low_price = data["Close"].min()
+# ---------- High / Low for current window ----------
+hi_idx = data["Close"].idxmax()
+lo_idx = data["Close"].idxmin()
+hi_price, lo_price = data.loc[hi_idx, "Close"], data.loc[lo_idx, "Close"]
+
 st.markdown(
     f"<div style='font-size:14px; margin-top:4px;'>"
-    f"<b>High:</b> ${high_price:,.2f} &nbsp;&nbsp;|&nbsp;&nbsp; "
-    f"<b>Low:</b> ${low_price:,.2f}"
+    f"<b>High:</b> ${hi_price:,.2f} "
+    f"(<span style='color:#888'>{hi_idx:%Y-%m-%d %H:%M}</span>)"
+    f" &nbsp;&nbsp;|&nbsp;&nbsp; "
+    f"<b>Low:</b> ${lo_price:,.2f} "
+    f"(<span style='color:#888'>{lo_idx:%Y-%m-%d %H:%M}</span>)"
     f"</div>",
     unsafe_allow_html=True,
 )
