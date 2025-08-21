@@ -152,5 +152,5 @@ if st.sidebar.button("🔄 Refresh Data"):
 
 # Footer
 st.markdown("---")
-st.caption("Data provided by Yahoo Finance. Prices are adjusted for splits and dividends.")
+
 st.caption(f"Last updated: {datetime.now():%Y-%m-%d %H:%M:%S}")
