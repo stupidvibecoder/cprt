@@ -163,7 +163,7 @@ else:
 #                     NHTSA CRASH DATA SECTION
 # =====================================================================
 st.header("NHTSA Crash Data (upload and visualize)")
-st.caption("Upload a CSV export (e.g., FARS/CRSS monthly or yearly counts). We'll chart it like the stock chart.")
+st.caption("Upload a CSV export (e.g., FARS/CRSS monthly or yearly counts).")
 
 # Controls for NHTSA data
 nhtsa_col1, nhtsa_col2, nhtsa_col3 = st.columns([2,2,1])
@@ -239,4 +239,4 @@ if nhtsa_df is not None:
         f"</div>", unsafe_allow_html=True
     )
 else:
-    st.info("Upload a CSV export from NHTSA (FARS/CRSS)—for example monthly total crashes, fatalities, or total-loss proxies—and we’ll chart it.")
+    st.info("Upload a CSV export from NHTSA (FARS/CRSS).")
