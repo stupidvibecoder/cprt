@@ -123,7 +123,7 @@ st.plotly_chart(fig, use_container_width=True)
 
 # ---------------- Summary Statistics ----------------
 st.markdown("### Summary Statistics")
-col1, col2, col3 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 
 with col1:
     high = stock_data['High'].max()
