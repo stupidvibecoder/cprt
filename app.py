@@ -134,18 +134,30 @@ fig.update_layout(
 )
 st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- High/Low readout ----------------
-hi_i = int(stock_data['Close'].idxmax())
-lo_i = int(stock_data['Close'].idxmin())
-st.markdown(
-    f"<div style='font-size:14px;'>"
-    f"<b>High:</b> ${stock_data.loc[hi_i,'Close']:.2f} "
-    f"(<span style='color:#888'>{hi_i:%Y-%m-%d %H:%M}</span>) "
-    f"&nbsp;&nbsp;|&nbsp;&nbsp; "
-    f"<b>Low:</b> ${stock_data.loc[lo_i,'Close']:.2f} "
-    f"(<span style='color:#888'>{lo_i:%Y-%m-%d %H:%M}</span>)"
-    f"</div>", unsafe_allow_html=True
-)
+# ---------------- High/Low readout (robust for DatetimeIndex) ----------------
+if len(stock_data) >= 1:
+    hi_ts = stock_data['Close'].idxmax()   # this is a Timestamp (index label)
+    lo_ts = stock_data['Close'].idxmin()
+
+    hi_price = float(stock_data.loc[hi_ts, 'Close'])
+    lo_price = float(stock_data.loc[lo_ts, 'Close'])
+
+    # If your index isn’t datetime, this formatting will still work (it will print the object)
+    hi_ts_str = hi_ts.strftime("%Y-%m-%d %H:%M") if hasattr(hi_ts, "strftime") else str(hi_ts)
+    lo_ts_str = lo_ts.strftime("%Y-%m-%d %H:%M") if hasattr(lo_ts, "strftime") else str(lo_ts)
+
+    st.markdown(
+        f"<div style='font-size:14px;'>"
+        f"<b>High:</b> ${hi_price:,.2f} "
+        f"(<span style='color:#888'>{hi_ts_str}</span>) "
+        f"&nbsp;&nbsp;|&nbsp;&nbsp; "
+        f"<b>Low:</b> ${lo_price:,.2f} "
+        f"(<span style='color:#888'>{lo_ts_str}</span>)"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+else:
+    st.info("Not enough data to compute high/low.")
 
 # =====================================================================
 #                     NHTSA CRASH DATA SECTION
