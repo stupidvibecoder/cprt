@@ -163,4 +163,4 @@ fig.update_layout(
 # Display the chart
 st.plotly_chart(fig, use_container_width=True)
 
-
+st.title("Total Loss Rate Data")
