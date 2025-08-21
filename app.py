@@ -149,36 +149,7 @@ with col4:
     st.metric("Volatility (σ)", f"${volatility:.2f}")
     st.caption("Standard deviation")
 
-# ---------------- Price Movement Analysis ----------------
-st.markdown("### Price Movement")
-col1, col2 = st.columns(2)
 
-with col1:
-    # Calculate daily returns
-    returns = stock_data['Close'].pct_change().dropna()
-    positive_days = (returns > 0).sum()
-    negative_days = (returns < 0).sum()
-    
-    st.write(f"**Positive periods:** {positive_days} ({positive_days/len(returns)*100:.1f}%)")
-    st.write(f"**Negative periods:** {negative_days} ({negative_days/len(returns)*100:.1f}%)")
-    st.write(f"**Average return:** {returns.mean()*100:.3f}%")
-
-with col2:
-    # Price range analysis
-    price_range = stock_data['High'] - stock_data['Low']
-    avg_range = price_range.mean()
-    
-    st.write(f"**Average daily range:** ${avg_range:.2f}")
-    st.write(f"**Largest move:** ${price_range.max():.2f}")
-    st.write(f"**52-week range:** $45.05 - $64.38")  # From search results
-
-# ---------------- Data Preview ----------------
-with st.expander("📊 View Raw Data (Last 20 Records)"):
-    preview = stock_data.tail(20).copy()
-    preview = preview.round(2)
-    # Format the index for better display
-    preview.index = preview.index.strftime('%Y-%m-%d %H:%M')
-    st.dataframe(preview, height=400)
 
 # ---------------- Sidebar Info ----------------
 st.sidebar.write("**Symbol:** CPRT")
