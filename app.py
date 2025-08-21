@@ -145,7 +145,7 @@ if show_ma and ma_data is not None:
             mode='lines',
             name=f'{ma_period}-day MA',
             line=dict(color='yellow', width=2, dash='dash'),
-            hovertemplate='Date: %{x}<br>MA: $%{y:.2f}<extra></extra>'
+            hovertemplate='MA: $%{y:.2f}<extra></extra>'
         )
     )
 
