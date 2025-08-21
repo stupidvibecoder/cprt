@@ -92,7 +92,7 @@ with col2:
 with col3:
     st.metric("Volume", f"{stock_data['Volume'].iloc[-1]:,.0f}")
 
-
+# ---------------- Create Simple Line Chart ----------------
 # Using a simpler approach to avoid Plotly errors
 fig = go.Figure()
 
@@ -103,9 +103,23 @@ fig.add_trace(
         y=stock_data['Close'],
         mode='lines',
         name='Close Price',
-        line=dict(color='blue', width=2)
+        line=dict(color='blue', width=2),
+        hovertemplate='Date: %{x}<br>Price: $%{y:.2f}<extra></extra>'
     )
 )
+
+# Add moving average trace if enabled
+if show_ma and ma_data is not None:
+    fig.add_trace(
+        go.Scatter(
+            x=stock_data.index,
+            y=ma_data,
+            mode='lines',
+            name=f'{ma_period}-day MA',
+            line=dict(color='yellow', width=2, dash='dash'),
+            hovertemplate='Date: %{x}<br>MA: $%{y:.2f}<extra></extra>'
+        )
+    )
 
 # Basic layout without complex updates
 fig.update_layout(
@@ -115,15 +129,34 @@ fig.update_layout(
     height=600,
     template="plotly_white",
     showlegend=True,
-    hovermode='x'
+    hovermode='x unified'  # Changed to unified for better hover display
 )
 
 # Display the chart
 st.plotly_chart(fig, use_container_width=True)
 
+# ---------------- Volume Chart ----------------
+st.subheader("Trading Volume")
+vol_fig = go.Figure()
+vol_fig.add_trace(
+    go.Bar(
+        x=stock_data.index,
+        y=stock_data['Volume'],
+        name='Volume',
+        marker_color='lightgray'
+    )
+)
+vol_fig.update_layout(
+    height=200,
+    showlegend=False,
+    xaxis_title="",
+    yaxis_title="Volume"
+)
+st.plotly_chart(vol_fig, use_container_width=True)
+
 # ---------------- Summary Statistics ----------------
 st.markdown("### Summary Statistics")
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     high = stock_data['High'].max()
@@ -140,17 +173,47 @@ with col2:
 with col3:
     avg = stock_data['Close'].mean()
     st.metric("Average Price", f"${avg:.2f}")
+    st.caption(f"Over {len(stock_data)} periods")
 
-# -------------- Sidebar Info ----------------
-st.sidebar.write("**Symbol:** CPRT")
+with col4:
+    volatility = stock_data['Close'].std()
+    st.metric("Volatility (σ)", f"${volatility:.2f}")
+    st.caption("Standard deviation")
+
+# ---------------- Price Movement Analysis ----------------
+st.markdown("### Price Movement")
+col1, col2 = st.columns(2)
+
+with col1:
+    # Calculate daily returns
+    returns = stock_data['Close'].pct_change().dropna()
+    positive_days = (returns > 0).sum()
+    negative_days = (returns < 0).sum()
+    
+    st.write(f"**Positive periods:** {positive_days} ({positive_days/len(returns)*100:.1f}%)")
+    st.write(f"**Negative periods:** {negative_days} ({negative_days/len(returns)*100:.1f}%)")
+    st.write(f"**Average return:** {returns.mean()*100:.3f}%")
+
+with col2:
+    # Price range analysis
+    price_range = stock_data['High'] - stock_data['Low']
+    avg_range = price_range.mean()
+    
+    st.write(f"**Average daily range:** ${avg_range:.2f}")
+    st.write(f"**Largest move:** ${price_range.max():.2f}")
+    st.write(f"**52-week range:** $45.05 - $64.38")  # From search results
+
+# ---------------- Data Preview ----------------
+with st.expander("📊 View Raw Data (Last 20 Records)"):
+    preview = stock_data.tail(20).copy()
+    preview = preview.round(2)
+    # Format the index for better display
+    preview.index = preview.index.strftime('%Y-%m-%d %H:%M')
+    st.dataframe(preview, height=400)
 
 
-# Refresh button
-if st.sidebar.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-    st.experimental_rerun()
 
 # Footer
 st.markdown("---")
-
+st.caption("Data provided by Yahoo Finance. Prices are adjusted for splits and dividends.")
 st.caption(f"Last updated: {datetime.now():%Y-%m-%d %H:%M:%S}")
