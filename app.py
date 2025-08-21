@@ -8,54 +8,60 @@ from streamlit_plotly_events import plotly_events
 st.set_page_config(page_title="Copart (CPRT) Stock Chart", layout="wide")
 st.title("Copart (CPRT) Stock Chart")
 
-# ---------------- Controls ----------------
-# Use only Yahoo-supported period/interval pairs
-TF_MAP = {
+# Safe Yahoo period/interval pairs (intraday only for recent ranges)
+TF = {
     "All Time": ("max", "1wk"),
     "5 Years": ("5y", "1d"),
     "1 Year": ("1y", "1d"),
     "6 Months": ("6mo", "1d"),
-    "3 Months": ("3mo", "1h"),     # intraday allowed ≤60d; yfinance stitches safely
+    "3 Months": ("3mo", "1d"),
     "1 Month": ("1mo", "30m"),
     "1 Week": ("7d", "5m"),
-    "1 Day (Intraday)": ("1d", "5m"),  # 1m is throttled; 5m is stable + fast
+    "1 Day (Intraday)": ("1d", "5m"),
 }
-label = st.sidebar.selectbox("Select timeframe:", list(TF_MAP.keys()))
-period, interval = TF_MAP[label]
+label = st.sidebar.selectbox("Select timeframe:", list(TF.keys()))
+period, interval = TF[label]
 autorefresh = st.sidebar.checkbox("Auto-refresh intraday (30s)", value=False) if "Intraday" in label else False
 
 # ---------------- Data ----------------
 @st.cache_data(ttl=60 if "Intraday" in label else 300, show_spinner=False)
 def fetch_prices(ticker: str, period: str, interval: str) -> pd.DataFrame:
     """
-    Get split/div-adjusted OHLCV. We use yfinance.download for reliability.
-    Ensures numeric dtypes and a 'ts' column for Plotly.
+    Robust fetch:
+      - Avoid MultiIndex columns by using group_by='column'
+      - Fall back to 'Adj Close' if 'Close' not present
+      - Force numeric dtypes
+      - Add 'ts' column for Plotly
     """
     df = yf.download(
         tickers=ticker,
         period=period,
         interval=interval,
-        auto_adjust=True,      # 'Close' is adjusted; no 'Adj Close' column returned
+        auto_adjust=True,         # returns adjusted OHLC, usually no 'Adj Close'
+        group_by="column",        # single-level columns
         progress=False,
-        group_by="ticker",
+        threads=True,
     )
-    if df.empty:
-        return df
 
-    # For single ticker, columns are single level. Normalize & ensure numeric
-    df = df.rename(columns=str.title)  # Open, High, Low, Close, Volume
-    # Drop rows with all-NaN (can occur at start/end of requests)
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # Normalize column names and ensure expected fields
+    df.columns = [c.title() for c in df.columns]  # Open, High, Low, Close, Volume, Adj Close (sometimes)
+    if "Close" not in df.columns and "Adj Close" in df.columns:
+        df["Close"] = df["Adj Close"]
+
+    # Drop rows with all NaN & coerce numerics
     df = df.dropna(how="all")
-    # Ensure datetime index is tz-naive for Plotly
-    if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
-        df.index = df.index.tz_convert(None)
-
-    # Critical: enforce float dtype (avoid category/object surprises)
-    for col in ("Open", "High", "Low", "Close"):
+    for col in ("Open", "High", "Low", "Close", "Volume"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df = df.dropna(subset=["Close"]).copy()
+    # Make tz-naive for Plotly
+    if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
+        df.index = df.index.tz_convert(None)
+
     df["ts"] = df.index
     return df
 
@@ -74,19 +80,19 @@ fig = go.Figure()
 fig.add_trace(
     go.Scattergl(
         x=data["ts"],
-        y=data["Close"].astype(float),   # explicitly float
+        y=data["Close"].astype(float),
         mode="lines",
         name="Close",
         hovertemplate="%{x|%Y-%m-%d %H:%M}<br>$%{y:.2f}<extra></extra>",
     )
 )
 
-# Skip non-trading hours on intraday for nicer spacing
+# Hide weekends / non-RTH on shorter windows for better spacing
 rangebreaks = []
-if "Intraday" in label or label in ("1 Week", "1 Month", "3 Months"):
+if label in ("1 Day (Intraday)", "1 Week", "1 Month"):
     rangebreaks = [
-        dict(bounds=["sat", "mon"]),          # weekends
-        dict(bounds=[16, 9.5], pattern="hour")  # non-RTH approx (ET)
+        dict(bounds=["sat", "mon"]),
+        dict(bounds=[16, 9.5], pattern="hour"),  # approx US RTH in ET
     ]
 
 fig.update_layout(
@@ -94,8 +100,10 @@ fig.update_layout(
     xaxis_title="Date/Time",
     yaxis_title="Price ($)",
     hovermode="x unified",
-    xaxis=dict(rangeslider=dict(visible=label not in ("1 Day (Intraday)", "1 Week")),
-               rangebreaks=rangebreaks),
+    xaxis=dict(
+        rangeslider=dict(visible=label not in ("1 Day (Intraday)", "1 Week")),
+        rangebreaks=rangebreaks,
+    ),
     margin=dict(l=40, r=20, t=60, b=40),
 )
 
@@ -104,7 +112,7 @@ hover_pts = plotly_events(
     fig,
     click_event=False,
     select_event=False,
-    hover_event=True,      # use flag (older versions don't accept events=[...])
+    hover_event=True,
     override_width="100%",
     override_height=520,
 )
@@ -125,16 +133,15 @@ else:
     )
 
 # ---------------- High/Low (value + date) ----------------
-# Use iloc to avoid any index dtype quirks
-close_series = data["Close"].astype(float).reset_index(drop=True)
-ts_series = pd.to_datetime(data["ts"]).reset_index(drop=True)
+close_vals = data["Close"].astype(float).reset_index(drop=True)
+ts_vals = pd.to_datetime(data["ts"]).reset_index(drop=True)
 
-hi_i = int(close_series.idxmax())
-lo_i = int(close_series.idxmin())
-hi_price = float(close_series.iloc[hi_i])
-lo_price = float(close_series.iloc[lo_i])
-hi_ts = ts_series.iloc[hi_i]
-lo_ts = ts_series.iloc[lo_i]
+hi_i = int(close_vals.idxmax())
+lo_i = int(close_vals.idxmin())
+hi_price = float(close_vals.iloc[hi_i])
+lo_price = float(close_vals.iloc[lo_i])
+hi_ts = ts_vals.iloc[hi_i]
+lo_ts = ts_vals.iloc[lo_i]
 
 st.markdown(
     f"<div style='font-size:14px; margin-top:4px;'>"
