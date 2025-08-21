@@ -19,6 +19,17 @@ TIMEFRAMES = {
     "5 Years": {"period": "5y", "interval": "1wk"},
 }
 
+# Define MA periods for different timeframes
+MA_PERIODS = {
+    "1 Day": None,  # No MA for intraday
+    "5 Days": None,  # No MA for 1 week
+    "1 Month": 9,
+    "3 Months": 9,
+    "6 Months": 50,
+    "1 Year": 50,
+    "5 Years": 100
+}
+
 # Sidebar controls
 selected_timeframe = st.sidebar.selectbox(
     "Select Timeframe:",
@@ -92,8 +103,25 @@ with col2:
 with col3:
     st.metric("Volume", f"{stock_data['Volume'].iloc[-1]:,.0f}")
 
-# ---------------- Create Simple Line Chart ----------------
-# Using a simpler approach to avoid Plotly errors
+# ---------------- Moving Average Configuration ----------------
+ma_period = MA_PERIODS.get(selected_timeframe)
+show_ma = False
+ma_data = None
+
+# Show checkbox only if MA is available for this timeframe
+if ma_period is not None:
+    show_ma = st.checkbox(f"Show {ma_period}-day Moving Average", value=False)
+    
+    if show_ma:
+        # Calculate moving average
+        if selected_timeframe == "5 Years":
+            # For weekly data, adjust the period (100 days ≈ 20 weeks)
+            ma_data = stock_data['Close'].rolling(window=20).mean()
+        else:
+            # For daily data
+            ma_data = stock_data['Close'].rolling(window=ma_period).mean()
+
+# ---------------- Create Chart ----------------
 fig = go.Figure()
 
 # Add line trace for closing prices
@@ -135,85 +163,11 @@ fig.update_layout(
 # Display the chart
 st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- Volume Chart ----------------
-st.subheader("Trading Volume")
-vol_fig = go.Figure()
-vol_fig.add_trace(
-    go.Bar(
-        x=stock_data.index,
-        y=stock_data['Volume'],
-        name='Volume',
-        marker_color='lightgray'
-    )
-)
-vol_fig.update_layout(
-    height=200,
-    showlegend=False,
-    xaxis_title="",
-    yaxis_title="Volume"
-)
-st.plotly_chart(vol_fig, use_container_width=True)
-
 # ---------------- Summary Statistics ----------------
 st.markdown("### Summary Statistics")
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 
 with col1:
     high = stock_data['High'].max()
     high_date = stock_data['High'].idxmax()
-    st.metric("Period High", f"${high:.2f}")
-    st.caption(f"{high_date.strftime('%Y-%m-%d')}")
-
-with col2:
-    low = stock_data['Low'].min()
-    low_date = stock_data['Low'].idxmin()
-    st.metric("Period Low", f"${low:.2f}")
-    st.caption(f"{low_date.strftime('%Y-%m-%d')}")
-
-with col3:
-    avg = stock_data['Close'].mean()
-    st.metric("Average Price", f"${avg:.2f}")
-    st.caption(f"Over {len(stock_data)} periods")
-
-with col4:
-    volatility = stock_data['Close'].std()
-    st.metric("Volatility (σ)", f"${volatility:.2f}")
-    st.caption("Standard deviation")
-
-# ---------------- Price Movement Analysis ----------------
-st.markdown("### Price Movement")
-col1, col2 = st.columns(2)
-
-with col1:
-    # Calculate daily returns
-    returns = stock_data['Close'].pct_change().dropna()
-    positive_days = (returns > 0).sum()
-    negative_days = (returns < 0).sum()
-    
-    st.write(f"**Positive periods:** {positive_days} ({positive_days/len(returns)*100:.1f}%)")
-    st.write(f"**Negative periods:** {negative_days} ({negative_days/len(returns)*100:.1f}%)")
-    st.write(f"**Average return:** {returns.mean()*100:.3f}%")
-
-with col2:
-    # Price range analysis
-    price_range = stock_data['High'] - stock_data['Low']
-    avg_range = price_range.mean()
-    
-    st.write(f"**Average daily range:** ${avg_range:.2f}")
-    st.write(f"**Largest move:** ${price_range.max():.2f}")
-    st.write(f"**52-week range:** $45.05 - $64.38")  # From search results
-
-# ---------------- Data Preview ----------------
-with st.expander("📊 View Raw Data (Last 20 Records)"):
-    preview = stock_data.tail(20).copy()
-    preview = preview.round(2)
-    # Format the index for better display
-    preview.index = preview.index.strftime('%Y-%m-%d %H:%M')
-    st.dataframe(preview, height=400)
-
-
-
-# Footer
-st.markdown("---")
-st.caption("Data provided by Yahoo Finance. Prices are adjusted for splits and dividends.")
-st.caption(f"Last updated: {datetime.now():%Y-%m-%d %H:%M:%S}")
+    st
