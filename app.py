@@ -132,7 +132,7 @@ fig.add_trace(
         mode='lines',
         name='Close Price',
         line=dict(color='blue', width=2),
-        hovertemplate='Date: %{x}<br>Price: $%{y:.2f}<extra></extra>'
+        hovertemplate='Price: $%{y:.2f}<extra></extra>'
     )
 )
 
