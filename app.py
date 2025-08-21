@@ -92,7 +92,7 @@ with col2:
 with col3:
     st.metric("Volume", f"{stock_data['Volume'].iloc[-1]:,.0f}")
 
-# ---------------- Create Simple Line Chart ----------------
+
 # Using a simpler approach to avoid Plotly errors
 fig = go.Figure()
 
@@ -121,11 +121,9 @@ fig.update_layout(
 # Display the chart
 st.plotly_chart(fig, use_container_width=True)
 
-
-
 # ---------------- Summary Statistics ----------------
 st.markdown("### Summary Statistics")
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(4)
 
 with col1:
     high = stock_data['High'].max()
@@ -142,16 +140,8 @@ with col2:
 with col3:
     avg = stock_data['Close'].mean()
     st.metric("Average Price", f"${avg:.2f}")
-    st.caption(f"Over {len(stock_data)} periods")
 
-with col4:
-    volatility = stock_data['Close'].std()
-    st.metric("Volatility (σ)", f"${volatility:.2f}")
-    st.caption("Standard deviation")
-
-
-
-# ---------------- Sidebar Info ----------------
+-------------- Sidebar Info ----------------
 st.sidebar.write("**Symbol:** CPRT")
 
 
