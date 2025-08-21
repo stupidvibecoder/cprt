@@ -4,290 +4,273 @@ import yfinance as yf
 import plotly.graph_objs as go
 from streamlit_plotly_events import plotly_events
 from datetime import datetime, timedelta
-import numpy as np
+import time
 
-# ---------------- Page ----------------
+# ---------------- Page Configuration ----------------
 st.set_page_config(page_title="Copart (CPRT) Stock Chart", layout="wide")
 st.title("Copart (CPRT) Stock Chart")
 
-# Valid Yahoo period/interval pairs - FIXED
-TF = {
-    "All Time": ("max", "1mo"),  # Changed from 1wk to 1mo for better reliability
-    "5 Years": ("5y", "1wk"),    # Changed from 1d to 1wk
-    "1 Year": ("1y", "1d"),
-    "6 Months": ("6mo", "1d"),
-    "3 Months": ("3mo", "1d"),   # Changed from 1h to 1d
-    "1 Month": ("1mo", "1d"),    # Changed from 30m to 1d
-    "1 Week": ("5d", "1h"),      # Changed from 7d/5m to 5d/1h
-    "1 Day (Intraday)": ("1d", "5m"),
+# ---------------- Helper Functions ----------------
+def validate_data(df, ticker):
+    """Validate that the data looks reasonable for the given ticker"""
+    if df.empty:
+        return False, "No data returned"
+    
+    # For CPRT, reasonable price range based on recent history
+    price_min = df['Close'].min()
+    price_max = df['Close'].max()
+    
+    # CPRT has been trading between roughly $40-$65 in recent years
+    if price_min < 20 or price_max > 100:
+        return False, f"Suspicious price range: ${price_min:.2f} - ${price_max:.2f}"
+    
+    return True, "Data validated"
+
+def get_stock_data(ticker, period, interval, retries=3):
+    """Fetch stock data with retries and validation"""
+    for attempt in range(retries):
+        try:
+            # Method 1: Try using download first
+            st.sidebar.write(f"Attempt {attempt + 1}: Fetching {period}/{interval}")
+            
+            if period == "1d":
+                # For intraday, calculate specific start/end times
+                end = datetime.now()
+                start = end - timedelta(days=1)
+                df = yf.download(ticker, start=start, end=end, interval=interval, 
+                               progress=False, auto_adjust=True, prepost=True)
+            elif period == "5d":
+                # For 1 week view
+                end = datetime.now()
+                start = end - timedelta(days=7)
+                df = yf.download(ticker, start=start, end=end, interval=interval,
+                               progress=False, auto_adjust=True)
+            else:
+                # For other periods
+                df = yf.download(ticker, period=period, interval=interval,
+                               progress=False, auto_adjust=True)
+            
+            if not df.empty:
+                # Clean column names if multi-level
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                
+                # Validate the data
+                is_valid, message = validate_data(df, ticker)
+                if is_valid:
+                    st.sidebar.success(f"✓ {message}")
+                    return df
+                else:
+                    st.sidebar.warning(f"⚠️ {message}")
+            
+            # Method 2: Try using Ticker.history if download fails
+            if df.empty or attempt == 1:
+                tkr = yf.Ticker(ticker)
+                df = tkr.history(period=period, interval=interval, auto_adjust=True)
+                
+                if not df.empty:
+                    is_valid, message = validate_data(df, ticker)
+                    if is_valid:
+                        return df
+            
+            time.sleep(1)  # Brief pause between attempts
+            
+        except Exception as e:
+            st.sidebar.error(f"Attempt {attempt + 1} failed: {str(e)[:50]}")
+            time.sleep(1)
+    
+    return pd.DataFrame()
+
+# ---------------- Timeframe Configuration ----------------
+# Simplified timeframes that work reliably
+TIMEFRAMES = {
+    "1 Day": {"period": "1d", "interval": "5m", "show_extended": True},
+    "5 Days": {"period": "5d", "interval": "30m", "show_extended": False},
+    "1 Month": {"period": "1mo", "interval": "1d", "show_extended": False},
+    "3 Months": {"period": "3mo", "interval": "1d", "show_extended": False},
+    "6 Months": {"period": "6mo", "interval": "1d", "show_extended": False},
+    "1 Year": {"period": "1y", "interval": "1d", "show_extended": False},
+    "5 Years": {"period": "5y", "interval": "1wk", "show_extended": False},
 }
 
-label = st.sidebar.selectbox("Select timeframe:", list(TF.keys()))
-period, interval = TF[label]
-autorefresh = st.sidebar.checkbox("Auto-refresh intraday (30s)", value=False) if "Intraday" in label else False
-
-# ---------------- Data ----------------
-@st.cache_data(ttl=60 if "Intraday" in label else 300, show_spinner=False)
-def fetch_prices(ticker: str, period: str, interval: str) -> pd.DataFrame:
-    """
-    Fetch stock prices from Yahoo Finance with better error handling.
-    """
-    try:
-        # Create ticker object
-        tkr = yf.Ticker(ticker)
-        
-        # For debugging
-        st.sidebar.write(f"Fetching: {period} / {interval}")
-        
-        # Try to download data with specific parameters
-        if period == "max":
-            # For max period, use download with specific date range
-            end_date = datetime.now()
-            start_date = datetime(2010, 1, 1)  # Reasonable start for most stocks
-            df = yf.download(ticker, start=start_date, end=end_date, interval=interval, 
-                           auto_adjust=True, progress=False, threads=False)
-        else:
-            # Use download for better reliability
-            df = yf.download(ticker, period=period, interval=interval, 
-                           auto_adjust=True, progress=False, threads=False)
-        
-        if df is None or df.empty:
-            st.error(f"No data returned for {ticker} with period={period}, interval={interval}")
-            return pd.DataFrame()
-        
-        # Handle multi-level columns if present
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        
-        # Use Close price
-        if 'Close' in df.columns:
-            price_col = 'Close'
-        elif 'close' in df.columns:
-            price_col = 'close'
-        else:
-            st.error(f"No close price column found. Available columns: {list(df.columns)}")
-            return pd.DataFrame()
-        
-        # Create clean dataframe
-        result_df = pd.DataFrame()
-        result_df['Price'] = df[price_col].astype(float)
-        result_df = result_df.dropna()
-        
-        if result_df.empty:
-            st.error("No valid price data after cleaning")
-            return pd.DataFrame()
-        
-        # Ensure index is datetime
-        if not isinstance(result_df.index, pd.DatetimeIndex):
-            result_df.index = pd.to_datetime(result_df.index)
-        
-        # Remove timezone if present
-        if result_df.index.tz is not None:
-            result_df.index = result_df.index.tz_localize(None)
-        
-        # Add timestamp column
-        result_df['ts'] = result_df.index
-        
-        # Validate prices are reasonable (CPRT typically trades $40-$70)
-        price_check = result_df['Price'].describe()
-        st.sidebar.markdown("### Price Statistics")
-        st.sidebar.write(f"Count: {len(result_df)}")
-        st.sidebar.write(f"Mean: ${price_check['mean']:.2f}")
-        st.sidebar.write(f"Min: ${price_check['min']:.2f}")
-        st.sidebar.write(f"Max: ${price_check['max']:.2f}")
-        st.sidebar.write(f"Latest: ${result_df['Price'].iloc[-1]:.2f}")
-        
-        # Warning if prices seem off
-        if price_check['max'] > 200 or price_check['min'] < 10:
-            st.sidebar.warning("⚠️ Prices may be incorrect!")
-        
-        return result_df[['ts', 'Price']]
-        
-    except Exception as e:
-        st.error(f"Error fetching data: {str(e)}")
-        st.sidebar.error(f"Debug: {type(e).__name__}")
-        return pd.DataFrame()
-
-# Auto-refresh logic
-if autorefresh:
-    st.autorefresh(interval=30_000, key="refresh_intraday")
-
-# Fetch data
-with st.spinner("Loading CPRT prices…"):
-    data = fetch_prices("CPRT", period, interval)
-
-if data.empty:
-    st.error("Failed to load data. Please try a different timeframe or refresh the page.")
-    
-    # Show alternative options
-    st.info("💡 Try these timeframes that typically work well:")
-    st.write("- 6 Months")
-    st.write("- 1 Year") 
-    st.write("- 5 Years")
-    st.stop()
-
-# ---------------- Plot ----------------
-fig = go.Figure()
-
-# Add the price line
-fig.add_trace(
-    go.Scattergl(
-        x=data['ts'],
-        y=data['Price'],
-        mode='lines',
-        name='CPRT Close',
-        line=dict(color='#1f77b4', width=2),
-        hovertemplate='%{x|%Y-%m-%d %H:%M}<br>Price: $%{y:.2f}<extra></extra>',
-    )
+# Sidebar controls
+selected_timeframe = st.sidebar.selectbox(
+    "Select Timeframe:",
+    list(TIMEFRAMES.keys()),
+    index=2  # Default to 1 Month
 )
 
-# Configure x-axis breaks for intraday charts
-rangebreaks = []
-if label in ("1 Day (Intraday)", "1 Week"):
-    rangebreaks = [
-        dict(bounds=["sat", "mon"]),  # Hide weekends
-        dict(bounds=[16, 9.5], pattern="hour"),  # Hide non-trading hours
-    ]
+tf_config = TIMEFRAMES[selected_timeframe]
+period = tf_config["period"]
+interval = tf_config["interval"]
 
-# Update layout
+# Auto-refresh for intraday
+if selected_timeframe == "1 Day":
+    auto_refresh = st.sidebar.checkbox("Auto-refresh (30s)", value=False)
+    if auto_refresh:
+        st.rerun()
+
+# ---------------- Fetch Data ----------------
+st.sidebar.markdown("### Data Fetching")
+data = get_stock_data("CPRT", period, interval)
+
+if data.empty:
+    st.error("❌ Unable to fetch stock data. Please try a different timeframe or refresh the page.")
+    st.info("💡 Yahoo Finance may be experiencing issues. Try these alternatives:")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔄 Retry with 1 Month"):
+            st.rerun()
+    with col2:
+        if st.button("🔄 Retry with 6 Months"):
+            st.rerun()
+    st.stop()
+
+# ---------------- Data Processing ----------------
+# Ensure we have the right columns
+price_column = 'Close' if 'Close' in data.columns else 'close'
+if price_column not in data.columns:
+    st.error(f"Price column not found. Available columns: {list(data.columns)}")
+    st.stop()
+
+# Create clean dataframe
+chart_data = pd.DataFrame()
+chart_data['Price'] = data[price_column]
+chart_data['Volume'] = data.get('Volume', data.get('volume', 0))
+chart_data = chart_data.dropna(subset=['Price'])
+
+# Remove timezone for Plotly compatibility
+if hasattr(chart_data.index, 'tz'):
+    chart_data.index = chart_data.index.tz_localize(None)
+
+# ---------------- Display Current Info ----------------
+st.sidebar.markdown("### Current Data")
+latest_price = chart_data['Price'].iloc[-1]
+st.sidebar.metric("Latest Price", f"${latest_price:.2f}")
+st.sidebar.write(f"Data points: {len(chart_data)}")
+st.sidebar.write(f"Range: ${chart_data['Price'].min():.2f} - ${chart_data['Price'].max():.2f}")
+
+# ---------------- Create Chart ----------------
+fig = go.Figure()
+
+# Add candlestick or line chart based on data availability
+if all(col in data.columns for col in ['Open', 'High', 'Low', 'Close']):
+    # Use candlestick if OHLC data is available
+    fig.add_trace(go.Candlestick(
+        x=data.index,
+        open=data['Open'],
+        high=data['High'],
+        low=data['Low'],
+        close=data['Close'],
+        name='CPRT',
+        increasing_line_color='green',
+        decreasing_line_color='red'
+    ))
+else:
+    # Otherwise use line chart
+    fig.add_trace(go.Scatter(
+        x=chart_data.index,
+        y=chart_data['Price'],
+        mode='lines',
+        name='CPRT Price',
+        line=dict(color='#1f77b4', width=2),
+        hovertemplate='Date: %{x}<br>Price: $%{y:.2f}<extra></extra>'
+    ))
+
+# Add volume bars if available
+if chart_data['Volume'].sum() > 0:
+    fig.add_trace(go.Bar(
+        x=chart_data.index,
+        y=chart_data['Volume'],
+        name='Volume',
+        yaxis='y2',
+        marker_color='lightgray',
+        opacity=0.3,
+        hovertemplate='Volume: %{y:,.0f}<extra></extra>'
+    ))
+
+# Configure layout
 fig.update_layout(
-    title=dict(
-        text=f"CPRT - {label}",
-        x=0.5,
-        xanchor='center'
-    ),
+    title=f"CPRT - {selected_timeframe}",
     xaxis=dict(
         title="Date/Time",
-        rangeslider=dict(visible=False),  # Disable rangeslider for cleaner view
-        rangebreaks=rangebreaks,
-        type='date',
-        showgrid=True,
-        gridcolor='rgba(128,128,128,0.2)',
+        rangeslider=dict(visible=False),
+        type='date'
     ),
     yaxis=dict(
         title="Price ($)",
+        titlefont=dict(color='#1f77b4'),
+        tickfont=dict(color='#1f77b4'),
         tickprefix='$',
-        tickformat='.2f',
-        side='right',  # Move price axis to right side
-        showgrid=True,
-        gridcolor='rgba(128,128,128,0.2)',
-        zeroline=False,
+        side='left'
+    ),
+    yaxis2=dict(
+        title="Volume",
+        titlefont=dict(color='gray'),
+        tickfont=dict(color='gray'),
+        overlaying='y',
+        side='right',
+        showgrid=False
     ),
     hovermode='x unified',
-    plot_bgcolor='white',
-    paper_bgcolor='white',
-    margin=dict(l=10, r=80, t=80, b=50),
     height=600,
-    showlegend=False,
+    template='plotly_white',
+    showlegend=False
 )
 
-# ---------------- Display Chart ----------------
-selected = plotly_events(
-    fig,
-    click_event=False,
-    select_event=False,
-    hover_event=True,
-    override_width="100%",
-    override_height=600,
-    key="plotly_events"
-)
+# Add range breaks for intraday charts
+if selected_timeframe in ["1 Day", "5 Days"]:
+    fig.update_xaxis(
+        rangebreaks=[
+            dict(bounds=["sat", "mon"]),  # Hide weekends
+            dict(bounds=[16, 9.5], pattern="hour")  # Hide non-trading hours
+        ]
+    )
 
-# ---------------- Info Display ----------------
+# Display chart
+chart_placeholder = st.empty()
+with chart_placeholder.container():
+    st.plotly_chart(fig, use_container_width=True, key="main_chart")
+
+# ---------------- Summary Statistics ----------------
+st.markdown("---")
 col1, col2, col3, col4 = st.columns(4)
 
-# Current price and change
-if len(data) >= 2:
-    current = data['Price'].iloc[-1]
-    previous = data['Price'].iloc[-2]
-    change = current - previous
-    pct_change = (change / previous) * 100
-    
-    with col1:
-        st.metric(
-            label="Current Price",
-            value=f"${current:.2f}",
-            delta=f"{pct_change:+.2f}%"
-        )
-else:
-    with col1:
-        st.metric(
-            label="Current Price",
-            value=f"${data['Price'].iloc[-1]:.2f}"
-        )
+with col1:
+    current = chart_data['Price'].iloc[-1]
+    if len(chart_data) > 1:
+        prev = chart_data['Price'].iloc[-2]
+        change = current - prev
+        pct = (change / prev) * 100
+        st.metric("Current Price", f"${current:.2f}", f"{pct:+.2f}%")
+    else:
+        st.metric("Current Price", f"${current:.2f}")
 
-# Period high
 with col2:
-    high_price = data['Price'].max()
-    high_date = data.loc[data['Price'].idxmax(), 'ts']
-    st.metric(
-        label="Period High",
-        value=f"${high_price:.2f}",
-        help=f"On {high_date:%Y-%m-%d}"
-    )
+    high = chart_data['Price'].max()
+    high_date = chart_data['Price'].idxmax()
+    st.metric("Period High", f"${high:.2f}", help=f"On {high_date:%m/%d}")
 
-# Period low
 with col3:
-    low_price = data['Price'].min()
-    low_date = data.loc[data['Price'].idxmin(), 'ts']
-    st.metric(
-        label="Period Low", 
-        value=f"${low_price:.2f}",
-        help=f"On {low_date:%Y-%m-%d}"
-    )
+    low = chart_data['Price'].min()
+    low_date = chart_data['Price'].idxmin()
+    st.metric("Period Low", f"${low:.2f}", help=f"On {low_date:%m/%d}")
 
-# Data points
 with col4:
-    st.metric(
-        label="Data Points",
-        value=f"{len(data):,}",
-        help=f"{interval} intervals"
-    )
+    avg = chart_data['Price'].mean()
+    st.metric("Average", f"${avg:.2f}")
 
-# Hover info
-if selected:
-    try:
-        hover_date = selected[0]['x']
-        hover_price = float(selected[0]['y'])
-        st.info(f"**Hover:** {hover_date} — ${hover_price:.2f}")
-    except:
-        pass
-
-# ---------------- Additional Analysis ----------------
-with st.expander("📊 Additional Analysis", expanded=False):
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("### Price Distribution")
-        # Simple histogram of prices
-        hist_fig = go.Figure()
-        hist_fig.add_trace(go.Histogram(
-            x=data['Price'],
-            nbinsx=20,
-            name='Price Distribution',
-            marker_color='lightblue'
-        ))
-        hist_fig.update_layout(
-            xaxis_title="Price ($)",
-            yaxis_title="Frequency",
-            height=300,
-            margin=dict(l=0, r=0, t=30, b=0)
-        )
-        st.plotly_chart(hist_fig, use_container_width=True)
-    
-    with col2:
-        st.markdown("### Statistics")
-        stats_df = pd.DataFrame({
-            'Statistic': ['Mean', 'Median', 'Std Dev', 'Range'],
-            'Value': [
-                f"${data['Price'].mean():.2f}",
-                f"${data['Price'].median():.2f}",
-                f"${data['Price'].std():.2f}",
-                f"${data['Price'].max() - data['Price'].min():.2f}"
-            ]
-        })
-        st.dataframe(stats_df, hide_index=True)
+# ---------------- Additional Information ----------------
+with st.expander("📊 Chart Data Preview"):
+    # Show last 10 data points
+    preview_data = chart_data.tail(10).copy()
+    preview_data['Date'] = preview_data.index
+    preview_data = preview_data[['Date', 'Price', 'Volume']]
+    preview_data['Price'] = preview_data['Price'].apply(lambda x: f"${x:.2f}")
+    preview_data['Volume'] = preview_data['Volume'].apply(lambda x: f"{x:,.0f}")
+    st.dataframe(preview_data, use_container_width=True)
 
 # Footer
 st.markdown("---")
 st.caption(f"Data from Yahoo Finance • Last updated: {datetime.now():%Y-%m-%d %H:%M:%S}")
-st.caption("Note: Prices are adjusted for splits and dividends")
+st.caption("Note: If data appears incorrect, try selecting a different timeframe or refreshing the page.")
