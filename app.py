@@ -5,8 +5,8 @@ import plotly.graph_objs as go
 from datetime import datetime, timedelta
 
 # ---------------- Page Configuration ----------------
-st.set_page_config(page_title="Copart (CPRT) Quantitative Dashboard", layout="wide")
-st.title("Stock Chart")
+st.set_page_config(page_title="Copart (CPRT) Stock Chart", layout="wide")
+st.title("Copart (CPRT) Stock Chart")
 
 # ---------------- Timeframe Configuration ----------------
 TIMEFRAMES = {
@@ -132,7 +132,7 @@ fig.add_trace(
         mode='lines',
         name='Close Price',
         line=dict(color='blue', width=2),
-        hovertemplate='Price: $%{y:.2f}<extra></extra>'
+        hovertemplate='Date: %{x}<br>Price: $%{y:.2f}<extra></extra>'
     )
 )
 
@@ -145,7 +145,7 @@ if show_ma and ma_data is not None:
             mode='lines',
             name=f'{ma_period}-day MA',
             line=dict(color='yellow', width=2, dash='dash'),
-            hovertemplate='MA: $%{y:.2f}<extra></extra>'
+            hovertemplate='Date: %{x}<br>MA: $%{y:.2f}<extra></extra>'
         )
     )
 
@@ -163,4 +163,43 @@ fig.update_layout(
 # Display the chart
 st.plotly_chart(fig, use_container_width=True)
 
-st.title("Total Loss Frequency")
+# ---------------- Summary Statistics ----------------
+st.markdown("### Summary Statistics")
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    high = stock_data['High'].max()
+    high_date = stock_data['High'].idxmax()
+    st.metric("Period High", f"${high:.2f}")
+    st.caption(f"{high_date.strftime('%Y-%m-%d')}")
+
+with col2:
+    low = stock_data['Low'].min()
+    low_date = stock_data['Low'].idxmin()
+    st.metric("Period Low", f"${low:.2f}")
+    st.caption(f"{low_date.strftime('%Y-%m-%d')}")
+
+with col3:
+    avg = stock_data['Close'].mean()
+    st.metric("Average Price", f"${avg:.2f}")
+
+# -------------- Sidebar Info ----------------
+st.sidebar.markdown("### Stock Information")
+st.sidebar.write("**Symbol:** CPRT")
+st.sidebar.write("**Exchange:** NASDAQ")
+st.sidebar.write("**Company:** Copart, Inc.")
+
+st.sidebar.markdown("### Data Info")
+st.sidebar.write(f"**Period:** {period}")
+st.sidebar.write(f"**Interval:** {interval}")
+st.sidebar.write(f"**Data Points:** {len(stock_data)}")
+
+# Refresh button
+if st.sidebar.button("🔄 Refresh Data"):
+    st.cache_data.clear()
+    st.rerun()
+
+# Footer
+st.markdown("---")
+st.caption("Data provided by Yahoo Finance")
+st.caption(f"Last updated: {datetime.now():%Y-%m-%d %H:%M:%S}")
