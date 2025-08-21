@@ -5,7 +5,7 @@ import plotly.graph_objs as go
 from datetime import datetime, timedelta
 
 # ---------------- Page Configuration ----------------
-st.set_page_config(page_title="Copart (CPRT) Stock Chart", layout="wide")
+st.set_page_config(page_title="Copart (CPRT) Quantitative Dashboard", layout="wide")
 st.title("Copart (CPRT) Stock Chart")
 
 # ---------------- Timeframe Configuration ----------------
