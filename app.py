@@ -4,6 +4,7 @@ import yfinance as yf
 import plotly.graph_objs as go
 from datetime import datetime, timedelta
 import numpy as np
+import numpy as np
 
 # ---------------- Page Configuration ----------------
 st.set_page_config(page_title="Copart (CPRT) Stock Chart", layout="wide")
