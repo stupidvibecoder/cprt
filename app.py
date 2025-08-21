@@ -163,11 +163,4 @@ fig.update_layout(
 # Display the chart
 st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- Summary Statistics ----------------
-st.markdown("### Summary Statistics")
-col1, col2, col3 = st.columns(3)
 
-with col1:
-    high = stock_data['High'].max()
-    high_date = stock_data['High'].idxmax()
-    st
