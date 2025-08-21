@@ -121,24 +121,7 @@ fig.update_layout(
 # Display the chart
 st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- Volume Chart ----------------
-st.subheader("Trading Volume")
-vol_fig = go.Figure()
-vol_fig.add_trace(
-    go.Bar(
-        x=stock_data.index,
-        y=stock_data['Volume'],
-        name='Volume',
-        marker_color='lightgray'
-    )
-)
-vol_fig.update_layout(
-    height=200,
-    showlegend=False,
-    xaxis_title="",
-    yaxis_title="Volume"
-)
-st.plotly_chart(vol_fig, use_container_width=True)
+
 
 # ---------------- Summary Statistics ----------------
 st.markdown("### Summary Statistics")
