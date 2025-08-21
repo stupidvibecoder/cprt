@@ -141,7 +141,7 @@ with col3:
     avg = stock_data['Close'].mean()
     st.metric("Average Price", f"${avg:.2f}")
 
--------------- Sidebar Info ----------------
+# -------------- Sidebar Info ----------------
 st.sidebar.write("**Symbol:** CPRT")
 
 
