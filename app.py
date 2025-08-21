@@ -8,7 +8,7 @@ import numpy as np
 
 # ---------------- Page Configuration ----------------
 st.set_page_config(page_title="Copart (CPRT) Stock Chart", layout="wide")
-st.title("Copart (CPRT) Stock Chart")
+st.title("Stock Price Chart")
 
 # ---------------- Timeframe Configuration ----------------
 TIMEFRAMES = {
@@ -166,42 +166,5 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 
 # ---------------- Summary Statistics ----------------
-st.markdown("### Summary Statistics")
-col1, col2, col3 = st.columns(3)
+st.title("Total Loss Frequency")
 
-with col1:
-    high = stock_data['High'].max()
-    high_date = stock_data['High'].idxmax()
-    st.metric("Period High", f"${high:.2f}")
-    st.caption(f"{high_date.strftime('%Y-%m-%d')}")
-
-with col2:
-    low = stock_data['Low'].min()
-    low_date = stock_data['Low'].idxmin()
-    st.metric("Period Low", f"${low:.2f}")
-    st.caption(f"{low_date.strftime('%Y-%m-%d')}")
-
-with col3:
-    avg = stock_data['Close'].mean()
-    st.metric("Average Price", f"${avg:.2f}")
-
-# -------------- Sidebar Info ----------------
-st.sidebar.markdown("### Stock Information")
-st.sidebar.write("**Symbol:** CPRT")
-st.sidebar.write("**Exchange:** NASDAQ")
-st.sidebar.write("**Company:** Copart, Inc.")
-
-st.sidebar.markdown("### Data Info")
-st.sidebar.write(f"**Period:** {period}")
-st.sidebar.write(f"**Interval:** {interval}")
-st.sidebar.write(f"**Data Points:** {len(stock_data)}")
-
-# Refresh button
-if st.sidebar.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-    st.rerun()
-
-# Footer
-st.markdown("---")
-st.caption("Data provided by Yahoo Finance")
-st.caption(f"Last updated: {datetime.now():%Y-%m-%d %H:%M:%S}")
