@@ -198,23 +198,8 @@ with st.expander("📊 View Raw Data (Last 20 Records)"):
     st.dataframe(preview, height=400)
 
 # ---------------- Sidebar Info ----------------
-st.sidebar.markdown("### Stock Information")
 st.sidebar.write("**Symbol:** CPRT")
-st.sidebar.write("**Exchange:** NASDAQ")
-st.sidebar.write("**Company:** Copart, Inc.")
-st.sidebar.write("**Sector:** Industrials")
 
-st.sidebar.markdown("### Data Status")
-st.sidebar.write(f"**Period:** {period}")
-st.sidebar.write(f"**Interval:** {interval}")
-st.sidebar.write(f"**Data Points:** {len(stock_data)}")
-st.sidebar.write(f"**First Record:** {stock_data.index[0].strftime('%Y-%m-%d %H:%M')}")
-st.sidebar.write(f"**Last Record:** {stock_data.index[-1].strftime('%Y-%m-%d %H:%M')}")
-
-st.sidebar.markdown("### Price Check")
-st.sidebar.write(f"**Min Price:** ${stock_data['Close'].min():.2f}")
-st.sidebar.write(f"**Max Price:** ${stock_data['Close'].max():.2f}")
-st.sidebar.write(f"**Current:** ${latest_price:.2f}")
 
 # Refresh button
 if st.sidebar.button("🔄 Refresh Data"):
