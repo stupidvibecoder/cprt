@@ -291,31 +291,43 @@ smooth = cD.checkbox("Light smoothing", value=True, help="3-pt rolling mean befo
 
 @st.cache_data(ttl=300)
 def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
-    """Build strike×maturity surface of risk-neutral density from call prices."""
+    """
+    Build strike×maturity surface of risk-neutral density from call prices.
+    Uses a rolling quadratic fit for C(K) to get a stable second derivative.
+    Returns:
+        K_grid (nK,), T_arr (nExp,), Z (nExp x nK)  where Z = q(K,T) normalized to [0,1].
+    """
     t = yf.Ticker(ticker)
     expiries_raw = getattr(t, "options", [])
-    if not expiries_raw: return None
+    if not expiries_raw:
+        return None
 
-    exp_dt = sorted([
-        pd.to_datetime(x).date()
-        for x in expiries_raw
-        if pd.to_datetime(x, errors="coerce") is not None
-    ])
-    exp_dt = [d for d in exp_dt if d >= today][:n_expiries]
-    if not exp_dt: return None
+    # choose nearest future expiries
+    exp_dt = []
+    for x in expiries_raw:
+        try:
+            d = pd.to_datetime(x).date()
+            if d >= date.today():
+                exp_dt.append(d)
+        except Exception:
+            continue
+    exp_dt = sorted(exp_dt)[:n_expiries]
+    if not exp_dt:
+        return None
 
-    # Spot
+    # spot (for strike window)
     spot_df = t.history(period="5d", interval="1d", auto_adjust=True)
     S0 = float(spot_df["Close"].iloc[-1]) if not spot_df.empty else None
 
-    # Collect per-expiry call data
+    # ---- collect calls per expiry with robust price fallback
     K_all, chains = [], {}
     for ed in exp_dt:
         try:
             ch = t.option_chain(pd.to_datetime(ed).strftime("%Y-%m-%d"))
         except Exception:
             continue
-        if ch is None or ch.calls is None or ch.calls.empty: continue
+        if ch is None or ch.calls is None or ch.calls.empty:
+            continue
         calls = ch.calls.copy()
 
         # robust price: last -> mid -> mark -> ask
@@ -323,111 +335,109 @@ def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
         if price is None or price.isna().all() or (price <= 0).all():
             bid = calls.get("bid", pd.Series(dtype=float)).fillna(0.0)
             ask = calls.get("ask", pd.Series(dtype=float)).fillna(0.0)
-            mid = (bid + ask) / 2.0
-            price = mid
-        if price.isna().all() or (price <= 0).all():
+            price = (bid + ask) / 2.0
+        if price is None or price.isna().all() or (price <= 0).all():
             mark = calls.get("mark")
             if mark is not None and not mark.isna().all():
                 price = mark
         if price is None or price.isna().all() or (price <= 0).all():
             price = calls.get("ask", pd.Series(dtype=float))
 
-        calls = pd.DataFrame({
+        df = pd.DataFrame({
             "strike": pd.to_numeric(calls["strike"], errors="coerce"),
-            "callPrice": pd.to_numeric(price, errors="coerce"),
+            "callPrice": pd.to_numeric(price, errors="coerce")
         }).dropna()
-        calls = calls[calls["callPrice"] > 0].sort_values("strike")
-        # Remove obvious outliers
-        q_lo, q_hi = calls["callPrice"].quantile([0.01, 0.99])
-        calls = calls[(calls["callPrice"] >= q_lo) & (calls["callPrice"] <= q_hi)]
-        if calls.empty: continue
+        df = df[df["callPrice"] > 0].sort_values("strike")
+        if df.empty:
+            continue
 
-        chains[ed] = calls
-        K_all.extend(calls["strike"].tolist())
+        # remove extreme price outliers (helps fit stability)
+        lo, hi = df["callPrice"].quantile([0.01, 0.99])
+        df = df[(df["callPrice"] >= lo) & (df["callPrice"] <= hi)]
+        if df.empty:
+            continue
 
-    if not chains: return None
+        chains[ed] = df
+        K_all.extend(df["strike"].tolist())
 
-    # Wider, adaptive strike window (AAPL is liquid)
+    if not chains:
+        return None
+
+    # ---- adaptive, wide strike window (prevents overly tight ranges)
     Kmin = float(np.percentile(K_all, 1))
     Kmax = float(np.percentile(K_all, 99))
     if S0:
         Kmin = max(Kmin, 0.3 * S0)
         Kmax = min(Kmax, 2.0 * S0)
-    if Kmax <= Kmin: return None
+    if Kmax <= Kmin:
+        return None
     K_grid = np.linspace(Kmin, Kmax, nK)
 
-    T_list = []
-    Z = []  # rows per expiry
+    # ---- helper: rolling quadratic fit to get C''(K)
+    def quad_second_derivative(K, C, K_eval, win=7):
+        """
+        For each K_eval[i], fit y = a*K^2 + b*K + c on a local window around K_eval[i].
+        Return 2*a at each eval point. Uses least squares; win must be odd.
+        """
+        n = len(K_eval)
+        out = np.zeros(n)
+        half = max(3, win//2)  # ensure enough points
+        for i in range(n):
+            # pick nearest points from original data (not the grid)
+            # use indices by distance to K_eval[i]
+            idx = np.argsort(np.abs(K - K_eval[i]))[:max(win, 5)]
+            Kw = K[idx]; Cw = C[idx]
+            # design matrix for quadratic
+            A = np.vstack([Kw**2, Kw, np.ones_like(Kw)]).T
+            try:
+                coeffs, *_ = np.linalg.lstsq(A, Cw, rcond=None)
+                a = coeffs[0]
+                out[i] = 2.0 * a
+            except Exception:
+                out[i] = 0.0
+        return out
+
+    # ---- build Z rows per expiry
     r = float(r_annual) / 100.0
+    T_list, Z_rows = [], []
+    for ed, df in chains.items():
+        Kraw = df["strike"].to_numpy()
+        Craw = df["callPrice"].to_numpy()
 
-    for ed, calls in chains.items():
-        Ck = np.interp(K_grid, calls["strike"].to_numpy(), calls["callPrice"].to_numpy())
-        if smooth and len(Ck) >= 3:
-            Ck = pd.Series(Ck).rolling(3, center=True, min_periods=1).mean().to_numpy()
+        # ensure strictly increasing K
+        order = np.argsort(Kraw)
+        Kraw = Kraw[order]; Craw = Craw[order]
 
-        dK = np.gradient(K_grid)
-        dC_dK = np.gradient(Ck, dK)
-        d2C_dK2 = np.gradient(dC_dK, dK)
+        # light pre-smooth on raw calls (median filter style)
+        if len(Craw) >= 5:
+            Craw = pd.Series(Craw).rolling(5, center=True, min_periods=1).median().to_numpy()
 
-        T = max((ed - today).days, 1) / 365.25
-        q = np.exp(r * T) * d2C_dK2
-        q = np.clip(q, a_min=0.0, a_max=None)  # clamp negatives
-        Z.append(q); T_list.append(T)
+        # compute second derivative via rolling quadratic fit (on raw points!)
+        Cpp_grid = quad_second_derivative(Kraw, Craw, K_grid, win= nine if len(Kraw)>=9 else 7)  # noqa
 
-    if not Z: return None
+        T = max((ed - date.today()).days, 1) / 365.25
+        q = np.exp(r * T) * Cpp_grid
+        q = np.clip(q, a_min=0.0, a_max=None)  # BL density must be ≥ 0
+        Z_rows.append(q)
+        T_list.append(T)
 
-    Z = np.array(Z)  # shape: (n_expiries, nK)
+    if not Z_rows:
+        return None
+
+    Z = np.array(Z_rows)
     T_arr = np.array(T_list)
 
-    # Normalize to [0,1] to ensure peaks show visually
+    # sort by maturity
+    order = np.argsort(T_arr)
+    T_arr = T_arr[order]; Z = Z[order, :]
+
+    # normalize (avoid flat color when values are tiny)
     zmax = float(np.nanmax(Z))
     if zmax > 0:
         Z = Z / zmax
 
-    # Sort by maturity
-    order = np.argsort(T_arr)
-    T_arr = T_arr[order]; Z = Z[order, :]
+    # need at least a 2x2 surface
+    if Z.shape[0] < 2 or Z.shape[1] < 2:
+        return None
 
     return K_grid, T_arr, Z
-
-with st.spinner("Estimating risk-neutral density from AAPL options…"):
-    rnd = get_rnd_surface(TICKER, n_exp, n_strikes, rf_pct)
-
-if rnd is None:
-    st.warning("Could not build the RND surface (no usable option data right now). Try fewer expiries or a smaller grid.")
-else:
-    K_grid, T_arr, Z = rnd  # x=strike grid, y=maturity list, z=density (normalized 0..1)
-    X, Y = np.meshgrid(K_grid, T_arr)
-
-    # Blue (low) → Dark red (high)
-    colorscale = [
-        [0.00, "#2c7bb6"], [0.25, "#91bfdb"],
-        [0.50, "#ffffbf"], [0.75, "#fdae61"],
-        [1.00, "#d7191c"],
-    ]
-
-    surf = go.Surface(
-        x=X, y=Y, z=Z,
-        colorscale=colorscale, cmin=0.0, cmax=1.0,
-        showscale=True, colorbar=dict(title="Density (norm)"),
-        contours=dict(z=dict(show=True, usecolormap=True, highlightcolor="black", project_z=True)),
-        opacity=0.97,
-    )
-
-    fig3d = go.Figure(data=[surf])
-    fig3d.update_layout(
-        title="Risk-neutral density surface — x: Strike, y: Maturity (years), z: Density",
-        scene=dict(
-            xaxis_title="Strike (K)",
-            yaxis_title="Maturity (years)",
-            zaxis_title="Risk-neutral density q(K,T) (normalized)",
-        ),
-        height=700, template="plotly_white", margin=dict(l=0, r=0, t=50, b=0),
-    )
-    st.plotly_chart(fig3d, use_container_width=True)
-
-    st.caption(
-        "RND via Breeden–Litzenberger: q(K,T) = e^{rT} * ∂²C/∂K². "
-        "Call prices are interpolated on a shared strike grid per expiry, optional light smoothing is applied, "
-        "negatives are clamped, and densities are normalized to [0,1] for visualization."
-    )
