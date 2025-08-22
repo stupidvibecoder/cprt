@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import numpy as np
 
 # ---------------- Page Configuration ----------------
-st.set_page_config(page_title="Copart (CPRT) Stock Chart", layout="wide")
+st.set_page_config(page_title="Copart Data", layout="wide")
 st.title("Stock Price Chart")
 
 # ---------------- Timeframe Configuration ----------------
