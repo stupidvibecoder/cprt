@@ -5,8 +5,8 @@ import plotly.graph_objs as go
 from datetime import date, timedelta
 
 # ---------------- Page ----------------
-st.set_page_config(page_title="Copart Data", layout="wide")
-st.title("Stock Price")
+st.set_page_config(page_title="Copart (CPRT) Stock Chart", layout="wide")
+st.title("Stock Price Chart")
 
 TICKER = "CPRT"
 
@@ -18,7 +18,7 @@ if "end_date" not in st.session_state:
     st.session_state.end_date = today
 
 # ---------------- One-line controls: 8 presets + Start/End inputs ----------------
-row = st.columns([1,1,1,1,1,1,1,1,2.2,2.2])
+row = st.columns([1,1,1,1,1,1,1,1,2.3,2.3])
 
 presets = [
     ("1D", 1),
@@ -45,21 +45,21 @@ if clicked:
         st.session_state.end_date = today
         st.session_state.start_date = today - timedelta(days=span)
 
-# Start date (never allow future; hide label to save space)
+# Start date (block future)
 start_input = row[8].date_input(
     "Start date",
     value=st.session_state.start_date,
     min_value=date(1990, 1, 1),
-    max_value=today,  # <-- blocks future years/dates
+    max_value=today,
     label_visibility="collapsed",
 )
 
-# End date (never allow future; min is start)
+# End date (block future; min is start)
 end_input = row[9].date_input(
     "End date",
     value=st.session_state.end_date,
     min_value=start_input,
-    max_value=today,  # <-- blocks future years/dates
+    max_value=today,
     label_visibility="collapsed",
 )
 
@@ -72,7 +72,7 @@ st.session_state.start_date, st.session_state.end_date = start_input, end_input
 def choose_interval(start_d: date, end_d: date) -> str:
     days = (end_d - start_d).days or 1
     # Yahoo-friendly choices
-    if days <= 7:    return "5m"   # (use "1m" if you truly need minute-by-minute)
+    if days <= 7:    return "5m"   # use "1m" if you truly need minute data
     if days <= 60:   return "30m"
     if days <= 365:  return "1d"
     if days <= 365*5:return "1wk"
@@ -151,7 +151,7 @@ if default_ma is not None:
     if show_ma:
         ma_data = stock_data["Close"].rolling(window=default_ma).mean()
 
-# ---------------- Plot ----------------
+# ---------------- Stock price chart ----------------
 fig = go.Figure()
 
 fig.add_trace(
@@ -227,3 +227,107 @@ st.markdown(
     f"</div>",
     unsafe_allow_html=True,
 )
+
+# =====================================================================
+#                     Comparable performance (percent change)
+# =====================================================================
+st.header("Comparable performance")
+
+# Mapping from user-facing choices -> Yahoo-compatible symbols
+COMPARATORS = {
+    "SPX": "^GSPC",   # S&P 500 index
+    "RBA": "RBA",     # Ritchie Bros.
+    "S5INDU": "XLI",  # Industrials sector proxy ETF
+}
+
+choices = st.multiselect(
+    "Compare against (multi-select):",
+    options=list(COMPARATORS.keys()),
+    default=[],  # start empty; pick what you want
+)
+
+@st.cache_data(ttl=120)
+def fetch_close_series(ticker: str, start_d: date, end_d: date, interval: str) -> pd.Series | None:
+    """Return a timezone-naive Close series (adjusted) indexed by timestamp."""
+    df = fetch_stock_data_range(ticker, start_d, end_d, interval)
+    if df is None or df.empty:
+        return None
+    s = df["Close"].copy()
+    s = pd.to_numeric(s, errors="coerce").dropna()
+    if isinstance(s.index, pd.DatetimeIndex) and s.index.tz is not None:
+        s.index = s.index.tz_convert(None)
+    return s
+
+# Build percent-change frame, base = 0% at first valid CPRT price
+cprt_close = fetch_close_series(TICKER, st.session_state.start_date, st.session_state.end_date, interval)
+if cprt_close is None or cprt_close.empty:
+    st.warning("No CPRT data for the selected range.")
+else:
+    # Align to CPRT's index to keep comparison fair
+    base = float(cprt_close.iloc[0])
+    cprt_pct = (cprt_close / base - 1.0) * 100.0
+    df_pct = pd.DataFrame({"CPRT": cprt_pct})
+
+    # Add selected comparators
+    for label in choices:
+        sym = COMPARATORS[label]
+        s = fetch_close_series(sym, st.session_state.start_date, st.session_state.end_date, interval)
+        if s is None or s.empty:
+            st.info(f"Could not load {label} data.")
+            continue
+        # Reindex to CPRT's timeline, forward-fill (so lines stay comparable)
+        s = s.reindex(df_pct.index).ffill()
+        base_c = float(s.iloc[0])
+        df_pct[label] = (s / base_c - 1.0) * 100.0
+
+    # Plot cumulative % change
+    pfig = go.Figure()
+    # CPRT first
+    pfig.add_trace(
+        go.Scatter(
+            x=df_pct.index,
+            y=df_pct["CPRT"],
+            mode="lines",
+            name="CPRT",
+            connectgaps=True,
+            hovertemplate="Date: %{x}<br>Change: %{y:.2f}%<extra></extra>",
+        )
+    )
+    # Comparators
+    for label in [k for k in df_pct.columns if k != "CPRT"]:
+        pfig.add_trace(
+            go.Scatter(
+                x=df_pct.index,
+                y=df_pct[label],
+                mode="lines",
+                name=label,  # show user-facing label (SPX, RBA, S5INDU)
+                connectgaps=True,
+                hovertemplate="Date: %{x}<br>Change: %{y:.2f}%<extra></extra>",
+            )
+        )
+
+    # Same rangebreak logic as price chart
+    rangebreaks2 = []
+    if days_span <= 120:
+        rangebreaks2 = [
+            dict(bounds=["sat", "mon"]),
+            dict(bounds=[16, 9.5], pattern="hour"),
+        ]
+
+    pfig.update_layout(
+        title=f"Since {st.session_state.start_date:%Y-%m-%d} (cumulative % change)",
+        xaxis_title="Date",
+        yaxis_title="Change (%)",
+        template="plotly_white",
+        hovermode="x unified",
+        height=520,
+        yaxis=dict(zeroline=True, zerolinewidth=1, zerolinecolor="#aaa", ticksuffix="%"),
+        xaxis=dict(rangeslider=dict(visible=False), rangebreaks=rangebreaks2),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    st.plotly_chart(pfig, use_container_width=True)
+
+    st.caption(
+        "Notes: SPX maps to Yahoo '^GSPC' (S&P 500). S5INDU maps to 'XLI' ETF as an Industrials proxy. "
+        "All series are adjusted and rebased to 0% on the start date."
+    )
