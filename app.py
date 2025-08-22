@@ -361,8 +361,8 @@ else:
 st.header("Risk-neutral density (3D)")
 
 cA, cB, cC, cD = st.columns([1.3,1.3,1.3,2])
-rf_pct = cA.number_input("Risk-free rate (annual, %)", value=4.0, step=0.25, min_value=0.0, max_value=15.0)
-n_exp = int(cB.slider("Expiries to include", min_value=2, max_value=8, value=5))
+rf_pct = cA.number_input("Risk-free rate (annual, %)", value=4.0, step=0.1, min_value=0.0, max_value=15.0)
+n_exp = int(cB.slider("Expiries to include", min_value=0, max_value=10, value=5))
 n_strikes = int(cC.slider("Strike grid size", min_value=25, max_value=200, value=80))
 smooth = cD.checkbox("Light smoothing", value=True, help="Apply a 3-point moving average to call prices before second derivative.")
 
