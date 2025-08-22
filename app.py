@@ -6,8 +6,8 @@ from datetime import datetime, date, timedelta
 import numpy as np
 
 # ---------------- Page Configuration ----------------
-st.set_page_config(page_title="Copart (CPRT) Stock Chart", layout="wide")
-st.title("Stock Price Chart")
+st.set_page_config(page_title="Copart Data", layout="wide")
+st.title("Stock Price")
 
 TICKER = "CPRT"
 
