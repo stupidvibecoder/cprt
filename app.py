@@ -9,9 +9,9 @@ st.set_page_config(page_title="Copart (CPRT) Stock Chart", layout="wide")
 st.title("Stock Price Chart")
 
 TICKER = "CPRT"
+today = date.today()
 
 # ---------------- Session defaults ----------------
-today = date.today()
 if "start_date" not in st.session_state:
     st.session_state.start_date = today - timedelta(days=30)  # default 1M
 if "end_date" not in st.session_state:
@@ -50,10 +50,9 @@ start_input = row[8].date_input(
     "Start date",
     value=st.session_state.start_date,
     min_value=date(1990, 1, 1),
-    max_value=today,
+    max_value= today,
     label_visibility="collapsed",
 )
-
 # End date (block future; min is start)
 end_input = row[9].date_input(
     "End date",
@@ -71,8 +70,7 @@ st.session_state.start_date, st.session_state.end_date = start_input, end_input
 # ---------------- Interval chooser ----------------
 def choose_interval(start_d: date, end_d: date) -> str:
     days = (end_d - start_d).days or 1
-    # Yahoo-friendly choices
-    if days <= 7:    return "5m"   # use "1m" if you truly need minute data
+    if days <= 7:    return "5m"   # (use "1m" only if you truly need minute data)
     if days <= 60:   return "30m"
     if days <= 365:  return "1d"
     if days <= 365*5:return "1wk"
@@ -80,13 +78,10 @@ def choose_interval(start_d: date, end_d: date) -> str:
 
 interval = choose_interval(st.session_state.start_date, st.session_state.end_date)
 
-# ---------------- Data fetch ----------------
+# ---------------- Data fetch helpers ----------------
 @st.cache_data(ttl=120)
 def fetch_stock_data_range(ticker: str, start_d: date, end_d: date, interval: str):
-    """
-    Fetch adjusted OHLCV between start/end with a safe interval.
-    Extend 'end' by one day because Yahoo's end can be exclusive.
-    """
+    """Adjusted OHLCV between start/end. Extend end by 1 day (Yahoo exclusivity)."""
     t = yf.Ticker(ticker)
     df = t.history(
         start=pd.Timestamp(start_d),
@@ -107,14 +102,46 @@ def fetch_stock_data_range(ticker: str, start_d: date, end_d: date, interval: st
     if df is None or df.empty:
         return None
 
+    # Normalize
     df = df[["Open", "High", "Low", "Close", "Volume"]].dropna().copy()
-    # numeric + tz-naive
     for c in ["Open", "High", "Low", "Close", "Volume"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df = df.dropna(subset=["Close"])
     if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
         df.index = df.index.tz_convert(None)
     return df
+
+@st.cache_data(ttl=3600)
+def fetch_earnings_df(ticker: str) -> pd.DataFrame:
+    """Get earnings date table with estimate/reported/surprise. yfinance returns last/future events."""
+    try:
+        t = yf.Ticker(ticker)
+        # limit large enough to cover several years
+        df = t.get_earnings_dates(limit=60)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        # Standardize column names if present
+        cols = {c.lower(): c for c in df.columns}
+        # Expected columns: 'Earnings Date', 'EPS Estimate', 'Reported EPS', 'Surprise(%)'
+        # Normalize names for easier access
+        rename_map = {}
+        for c in df.columns:
+            cl = c.lower()
+            if "earnings date" in cl: rename_map[c] = "Earnings Date"
+            elif "eps estimate" in cl: rename_map[c] = "EPS Estimate"
+            elif "reported eps" in cl: rename_map[c] = "Reported EPS"
+            elif "surprise" in cl: rename_map[c] = "Surprise(%)"
+        df = df.rename(columns=rename_map).copy()
+
+        # Ensure datetime + numerics
+        if "Earnings Date" in df.columns:
+            df["Earnings Date"] = pd.to_datetime(df["Earnings Date"], errors="coerce").dt.date
+        for c in ("EPS Estimate", "Reported EPS", "Surprise(%)"):
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df.dropna(subset=["Earnings Date"])
+    except Exception:
+        return pd.DataFrame()
 
 with st.spinner(f"Loading {TICKER} {interval} data…"):
     stock_data = fetch_stock_data_range(TICKER, st.session_state.start_date, st.session_state.end_date, interval)
@@ -137,7 +164,7 @@ with c2:
 with c3:
     st.metric("Volume", f"{stock_data['Volume'].iloc[-1]:,.0f}")
 
-# ---------------- Moving average (auto suggestion based on span) ----------------
+# ---------------- Moving average ----------------
 days_span = (st.session_state.end_date - st.session_state.start_date).days or 1
 if   days_span <= 7:    default_ma = None
 elif days_span <= 90:   default_ma = 9
@@ -151,6 +178,9 @@ if default_ma is not None:
     if show_ma:
         ma_data = stock_data["Close"].rolling(window=default_ma).mean()
 
+# ---------------- Earnings calendar toggle ----------------
+show_earn = st.checkbox("Earnings calendar", value=False)
+
 # ---------------- Stock price chart ----------------
 fig = go.Figure()
 
@@ -161,7 +191,7 @@ fig.add_trace(
         mode="lines",
         name="Close (Adj.)",
         line=dict(width=2),
-        connectgaps=True,  # draw through missing timestamps
+        connectgaps=True,
         hovertemplate="Date: %{x}<br>Price: $%{y:.2f}<extra></extra>",
     )
 )
@@ -178,6 +208,63 @@ if show_ma and ma_data is not None:
             hovertemplate="Date: %{x}<br>MA: $%{y:.2f}<extra></extra>",
         )
     )
+
+# If earnings overlay is on, add marker dots with EPS tooltip
+if show_earn:
+    earn_df = fetch_earnings_df(TICKER)
+    if not earn_df.empty:
+        # Filter earnings between the chosen dates
+        mask = (earn_df["Earnings Date"] >= st.session_state.start_date) & (earn_df["Earnings Date"] <= st.session_state.end_date)
+        earn_win = earn_df.loc[mask].copy()
+
+        if not earn_win.empty:
+            # Build y-values for markers using daily resampled close (so it works for intraday windows too)
+            daily_close = stock_data["Close"].resample("D").last().ffill()
+            xs = []
+            ys = []
+            hovers = []
+
+            for _, r in earn_win.iterrows():
+                d = pd.Timestamp(r["Earnings Date"])
+                if d in daily_close.index:
+                    y = float(daily_close.loc[d])
+                else:
+                    # if the exact date isn't in index (holiday), try nearest previous day
+                    y = float(daily_close.asof(d))
+                xs.append(d)
+                ys.append(y)
+
+                est = r["EPS Estimate"] if "EPS Estimate" in r else None
+                rep = r["Reported EPS"] if "Reported EPS" in r else None
+                spr = r["Surprise(%)"] if "Surprise(%)" in r else None
+
+                # Compute surprise if missing and we have est+rep
+                if pd.isna(spr) and (pd.notna(est) and pd.notna(rep) and est != 0):
+                    spr = (rep / est - 1.0) * 100.0
+
+                hover_text = (
+                    f"Earnings: {d.date()}<br>"
+                    f"Est EPS: {est if pd.notna(est) else '—'}<br>"
+                    f"Actual EPS: {rep if pd.notna(rep) else '—'}<br>"
+                    f"Surprise: {spr:.2f}%"
+                    if spr is not None and pd.notna(spr)
+                    else f"Earnings: {d.date()}<br>"
+                         f"Est EPS: {est if pd.notna(est) else '—'}<br>"
+                         f"Actual EPS: {rep if pd.notna(rep) else '—'}"
+                )
+                hovers.append(hover_text)
+
+            fig.add_trace(
+                go.Scatter(
+                    x=xs,
+                    y=ys,
+                    mode="markers",
+                    name="Earnings",
+                    marker=dict(size=8, symbol="circle", line=dict(width=1)),
+                    hovertemplate="%{text}<extra></extra>",
+                    text=hovers,
+                )
+            )
 
 # Range breaks for short spans only
 rangebreaks = []
@@ -213,7 +300,6 @@ hi_ts = stock_data["Close"].idxmax()
 lo_ts = stock_data["Close"].idxmin()
 hi_price = float(stock_data.loc[hi_ts, "Close"])
 lo_price = float(stock_data.loc[lo_ts, "Close"])
-
 hi_ts_str = hi_ts.strftime("%Y-%m-%d %H:%M") if hasattr(hi_ts, "strftime") else str(hi_ts)
 lo_ts_str = lo_ts.strftime("%Y-%m-%d %H:%M") if hasattr(lo_ts, "strftime") else str(lo_ts)
 
@@ -243,7 +329,7 @@ COMPARATORS = {
 choices = st.multiselect(
     "Compare against (multi-select):",
     options=list(COMPARATORS.keys()),
-    default=[],  # start empty; pick what you want
+    default=[],
 )
 
 @st.cache_data(ttl=120)
@@ -263,7 +349,6 @@ cprt_close = fetch_close_series(TICKER, st.session_state.start_date, st.session_
 if cprt_close is None or cprt_close.empty:
     st.warning("No CPRT data for the selected range.")
 else:
-    # Align to CPRT's index to keep comparison fair
     base = float(cprt_close.iloc[0])
     cprt_pct = (cprt_close / base - 1.0) * 100.0
     df_pct = pd.DataFrame({"CPRT": cprt_pct})
@@ -275,14 +360,12 @@ else:
         if s is None or s.empty:
             st.info(f"Could not load {label} data.")
             continue
-        # Reindex to CPRT's timeline, forward-fill (so lines stay comparable)
         s = s.reindex(df_pct.index).ffill()
         base_c = float(s.iloc[0])
         df_pct[label] = (s / base_c - 1.0) * 100.0
 
     # Plot cumulative % change
     pfig = go.Figure()
-    # CPRT first
     pfig.add_trace(
         go.Scatter(
             x=df_pct.index,
@@ -293,20 +376,18 @@ else:
             hovertemplate="Date: %{x}<br>Change: %{y:.2f}%<extra></extra>",
         )
     )
-    # Comparators
     for label in [k for k in df_pct.columns if k != "CPRT"]:
         pfig.add_trace(
             go.Scatter(
                 x=df_pct.index,
                 y=df_pct[label],
                 mode="lines",
-                name=label,  # show user-facing label (SPX, RBA, S5INDU)
+                name=label,
                 connectgaps=True,
                 hovertemplate="Date: %{x}<br>Change: %{y:.2f}%<extra></extra>",
             )
         )
 
-    # Same rangebreak logic as price chart
     rangebreaks2 = []
     if days_span <= 120:
         rangebreaks2 = [
@@ -329,5 +410,5 @@ else:
 
     st.caption(
         "Notes: SPX maps to Yahoo '^GSPC' (S&P 500). S5INDU maps to 'XLI' ETF as an Industrials proxy. "
-        "All series are adjusted and rebased to 0% on the start date."
+        "All series are adjusted and rebased to 0% on the start date. Earnings data from Yahoo Finance via yfinance."
     )
