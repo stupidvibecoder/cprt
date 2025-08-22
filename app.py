@@ -6,10 +6,10 @@ import plotly.graph_objs as go
 from datetime import date, timedelta
 
 # ============================== Page ==============================
-st.set_page_config(page_title="Copart (CPRT) Stock Chart", layout="wide")
+st.set_page_config(page_title="Apple (AAPL) Dashboard", layout="wide")
 st.title("Stock Price Chart")
 
-TICKER = "CPRT"
+TICKER = "AAPL"
 today = date.today()
 
 # ======================= Session defaults ========================
@@ -219,7 +219,16 @@ st.markdown(
 # =================================================================
 st.header("Comparable performance")
 
-COMPARATORS = {"SPX": "^GSPC", "RBA": "RBA", "S5INDU": "XLI"}
+# Mapping for the new comparator set
+COMPARATORS = {
+    "SPX": "^GSPC",
+    "QQQ (Tech ETF)": "QQQ",
+    "AMZN": "AMZN",
+    "GOOGL": "GOOGL",
+    "META": "META",
+    "NVDA": "NVDA",
+    "TSLA": "TSLA",
+}
 
 choices = st.multiselect("Compare against (multi-select):", options=list(COMPARATORS.keys()), default=[])
 
@@ -232,12 +241,12 @@ def fetch_close_series(ticker: str, start_d: date, end_d: date, interval: str) -
         s.index = s.index.tz_convert(None)
     return s
 
-cprt_close = fetch_close_series(TICKER, st.session_state.start_date, st.session_state.end_date, interval)
-if cprt_close is None or cprt_close.empty:
-    st.warning("No CPRT data for the selected range.")
+aapl_close = fetch_close_series(TICKER, st.session_state.start_date, st.session_state.end_date, interval)
+if aapl_close is None or aapl_close.empty:
+    st.warning("No AAPL data for the selected range.")
 else:
-    base = float(cprt_close.iloc[0])
-    df_pct = pd.DataFrame({"CPRT": (cprt_close/base - 1)*100})
+    base = float(aapl_close.iloc[0])
+    df_pct = pd.DataFrame({"AAPL": (aapl_close/base - 1)*100})
     for label in choices:
         sym = COMPARATORS[label]
         s = fetch_close_series(sym, st.session_state.start_date, st.session_state.end_date, interval)
@@ -247,10 +256,10 @@ else:
         df_pct[label] = (s/float(s.iloc[0]) - 1)*100
 
     pfig = go.Figure()
-    pfig.add_trace(go.Scatter(x=df_pct.index, y=df_pct["CPRT"], mode="lines",
-                              name="CPRT", connectgaps=True,
+    pfig.add_trace(go.Scatter(x=df_pct.index, y=df_pct["AAPL"], mode="lines",
+                              name="AAPL", connectgaps=True,
                               hovertemplate="Date: %{x}<br>Change: %{y:.2f}%<extra></extra>"))
-    for label in [c for c in df_pct.columns if c != "CPRT"]:
+    for label in [c for c in df_pct.columns if c != "AAPL"]:
         pfig.add_trace(go.Scatter(x=df_pct.index, y=df_pct[label], mode="lines",
                                   name=label, connectgaps=True,
                                   hovertemplate="Date: %{x}<br>Change: %{y:.2f}%<extra></extra>"))
@@ -266,32 +275,40 @@ else:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
     st.plotly_chart(pfig, use_container_width=True)
-    st.caption("Notes: SPX→^GSPC (S&P 500), S5INDU→XLI ETF proxy. Series rebased to 0% on the start date.")
+
+    st.caption("SPX→^GSPC, ‘QQQ (Tech ETF)’→QQQ. All series rebased to 0% on the start date; adjusted closes used.")
 
 # =================================================================
-#                 Risk-neutral density (3D) surface
+#                 Risk-neutral density (3D) surface — AAPL options
 # =================================================================
 st.header("Risk-neutral density (3D)")
 
 cA, cB, cC, cD = st.columns([1.4,1.4,1.4,2.2])
 rf_pct = cA.number_input("Risk-free rate (annual, %)", value=4.0, step=0.25, min_value=0.0, max_value=15.0)
-n_exp = int(cB.slider("Expiries to include", min_value=2, max_value=8, value=5))
-n_strikes = int(cC.slider("Strike grid size", min_value=25, max_value=200, value=80))
+n_exp = int(cB.slider("Expiries to include", min_value=2, max_value=12, value=6))
+n_strikes = int(cC.slider("Strike grid size", min_value=25, max_value=200, value=100))
 smooth = cD.checkbox("Light smoothing", value=True, help="3-pt rolling mean before ∂²/∂K² to reduce noise.")
 
 @st.cache_data(ttl=300)
 def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
+    """Build strike×maturity surface of risk-neutral density from call prices."""
     t = yf.Ticker(ticker)
     expiries_raw = getattr(t, "options", [])
     if not expiries_raw: return None
 
-    exp_dt = sorted([pd.to_datetime(x).date() for x in expiries_raw if pd.to_datetime(x).date() >= today])[:n_expiries]
+    exp_dt = sorted([
+        pd.to_datetime(x).date()
+        for x in expiries_raw
+        if pd.to_datetime(x, errors="coerce") is not None
+    ])
+    exp_dt = [d for d in exp_dt if d >= today][:n_expiries]
     if not exp_dt: return None
 
+    # Spot
     spot_df = t.history(period="5d", interval="1d", auto_adjust=True)
     S0 = float(spot_df["Close"].iloc[-1]) if not spot_df.empty else None
 
-    # collect per-expiry call data and global strike range
+    # Collect per-expiry call data
     K_all, chains = [], {}
     for ed in exp_dt:
         try:
@@ -301,21 +318,28 @@ def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
         if ch is None or ch.calls is None or ch.calls.empty: continue
         calls = ch.calls.copy()
 
-        # choose a robust price: lastPrice; if bad, mid = (bid+ask)/2; finally use 'ask' as last resort
+        # robust price: last -> mid -> mark -> ask
         price = calls.get("lastPrice")
-        if price is None or price.isna().all():
+        if price is None or price.isna().all() or (price <= 0).all():
             bid = calls.get("bid", pd.Series(dtype=float)).fillna(0.0)
             ask = calls.get("ask", pd.Series(dtype=float)).fillna(0.0)
             mid = (bid + ask) / 2.0
             price = mid
-            if price.isna().all() or (price <= 0).all():
-                price = calls.get("ask", pd.Series(dtype=float))
+        if price.isna().all() or (price <= 0).all():
+            mark = calls.get("mark")
+            if mark is not None and not mark.isna().all():
+                price = mark
+        if price is None or price.isna().all() or (price <= 0).all():
+            price = calls.get("ask", pd.Series(dtype=float))
 
         calls = pd.DataFrame({
             "strike": pd.to_numeric(calls["strike"], errors="coerce"),
             "callPrice": pd.to_numeric(price, errors="coerce"),
         }).dropna()
         calls = calls[calls["callPrice"] > 0].sort_values("strike")
+        # Remove obvious outliers
+        q_lo, q_hi = calls["callPrice"].quantile([0.01, 0.99])
+        calls = calls[(calls["callPrice"] >= q_lo) & (calls["callPrice"] <= q_hi)]
         if calls.empty: continue
 
         chains[ed] = calls
@@ -323,21 +347,20 @@ def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
 
     if not chains: return None
 
-    # reasonable strike window
-    Kmin = float(np.percentile(K_all, 5))
-    Kmax = float(np.percentile(K_all, 95))
+    # Wider, adaptive strike window (AAPL is liquid)
+    Kmin = float(np.percentile(K_all, 1))
+    Kmax = float(np.percentile(K_all, 99))
     if S0:
-        Kmin = max(Kmin, 0.5 * S0)
-        Kmax = min(Kmax, 1.6 * S0)
+        Kmin = max(Kmin, 0.3 * S0)
+        Kmax = min(Kmax, 2.0 * S0)
     if Kmax <= Kmin: return None
     K_grid = np.linspace(Kmin, Kmax, nK)
 
     T_list = []
-    Z = []  # density rows per expiry (len = n_expiries, nK columns)
+    Z = []  # rows per expiry
     r = float(r_annual) / 100.0
 
     for ed, calls in chains.items():
-        # interpolate call prices on common K grid
         Ck = np.interp(K_grid, calls["strike"].to_numpy(), calls["callPrice"].to_numpy())
         if smooth and len(Ck) >= 3:
             Ck = pd.Series(Ck).rolling(3, center=True, min_periods=1).mean().to_numpy()
@@ -349,49 +372,46 @@ def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
         T = max((ed - today).days, 1) / 365.25
         q = np.exp(r * T) * d2C_dK2
         q = np.clip(q, a_min=0.0, a_max=None)  # clamp negatives
-        T_list.append(T)
-        Z.append(q)
+        Z.append(q); T_list.append(T)
 
     if not Z: return None
 
     Z = np.array(Z)  # shape: (n_expiries, nK)
     T_arr = np.array(T_list)
 
-    # Sort by maturity just in case
+    # Normalize to [0,1] to ensure peaks show visually
+    zmax = float(np.nanmax(Z))
+    if zmax > 0:
+        Z = Z / zmax
+
+    # Sort by maturity
     order = np.argsort(T_arr)
-    T_arr = T_arr[order]
-    Z = Z[order, :]
+    T_arr = T_arr[order]; Z = Z[order, :]
 
     return K_grid, T_arr, Z
 
-with st.spinner("Estimating risk-neutral density from the options chain…"):
+with st.spinner("Estimating risk-neutral density from AAPL options…"):
     rnd = get_rnd_surface(TICKER, n_exp, n_strikes, rf_pct)
 
 if rnd is None:
-    st.warning("Could not build the RND surface (no usable option data). Try fewer expiries, a smaller grid, or different market hours.")
+    st.warning("Could not build the RND surface (no usable option data right now). Try fewer expiries or a smaller grid.")
 else:
-    K_grid, T_arr, Z = rnd  # x=strike grid, y=maturity list, z-matrix = density
-
-    # Build mesh for go.Surface: x(K) × y(T) -> z(density)
+    K_grid, T_arr, Z = rnd  # x=strike grid, y=maturity list, z=density (normalized 0..1)
     X, Y = np.meshgrid(K_grid, T_arr)
 
-    # Color scale: blue (low) → dark red (high)
+    # Blue (low) → Dark red (high)
     colorscale = [
-        [0.00, "#2c7bb6"],
-        [0.25, "#91bfdb"],
-        [0.50, "#ffffbf"],
-        [0.75, "#fdae61"],
+        [0.00, "#2c7bb6"], [0.25, "#91bfdb"],
+        [0.50, "#ffffbf"], [0.75, "#fdae61"],
         [1.00, "#d7191c"],
     ]
-    zmin = float(np.nanmin(Z))
-    zmax = float(np.nanmax(Z) if np.nanmax(Z) > 0 else 1.0)
 
     surf = go.Surface(
         x=X, y=Y, z=Z,
-        colorscale=colorscale, cmin=zmin, cmax=zmax,
-        showscale=True, colorbar=dict(title="Density"),
-        contours = dict(z=dict(show=True, usecolormap=True, highlightcolor="black", project_z=True)),
-        opacity=0.95,
+        colorscale=colorscale, cmin=0.0, cmax=1.0,
+        showscale=True, colorbar=dict(title="Density (norm)"),
+        contours=dict(z=dict(show=True, usecolormap=True, highlightcolor="black", project_z=True)),
+        opacity=0.97,
     )
 
     fig3d = go.Figure(data=[surf])
@@ -400,14 +420,14 @@ else:
         scene=dict(
             xaxis_title="Strike (K)",
             yaxis_title="Maturity (years)",
-            zaxis_title="Risk-neutral density q(K,T)",
+            zaxis_title="Risk-neutral density q(K,T) (normalized)",
         ),
         height=700, template="plotly_white", margin=dict(l=0, r=0, t=50, b=0),
     )
     st.plotly_chart(fig3d, use_container_width=True)
 
     st.caption(
-        "RND estimated via Breeden–Litzenberger: q(K,T) = e^{rT} * ∂²C/∂K². "
-        "We interpolate call prices across a common strike grid per expiry, apply a light smoothing (optional), "
-        "and clamp negative densities to zero to reduce numerical artifacts."
+        "RND via Breeden–Litzenberger: q(K,T) = e^{rT} * ∂²C/∂K². "
+        "Call prices are interpolated on a shared strike grid per expiry, optional light smoothing is applied, "
+        "negatives are clamped, and densities are normalized to [0,1] for visualization."
     )
