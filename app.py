@@ -113,56 +113,52 @@ def fetch_stock_data_range(ticker: str, start_d: date, end_d: date, interval: st
 
 @st.cache_data(ttl=3600)
 def fetch_earnings_df(ticker: str) -> pd.DataFrame:
-    """Get earnings date table with estimate/reported/surprise. yfinance returns last/future events."""
+    """
+    Get earnings dates with estimate/reported/surprise.
+    - Handles when yfinance returns dates as the *index*
+    - Normalizes column names
+    """
     try:
         t = yf.Ticker(ticker)
-        # limit large enough to cover several years
         df = t.get_earnings_dates(limit=60)
         if df is None or df.empty:
             return pd.DataFrame()
-        # Standardize column names if present
-        cols = {c.lower(): c for c in df.columns}
-        # Expected columns: 'Earnings Date', 'EPS Estimate', 'Reported EPS', 'Surprise(%)'
-        # Normalize names for easier access
+
+        # If earnings date is the index, move it to a column
+        if df.index.name and "date" in df.index.name.lower():
+            df = df.reset_index()
+
+        # Normalize columns
         rename_map = {}
         for c in df.columns:
-            cl = c.lower()
-            if "earnings date" in cl: rename_map[c] = "Earnings Date"
-            elif "eps estimate" in cl: rename_map[c] = "EPS Estimate"
-            elif "reported eps" in cl: rename_map[c] = "Reported EPS"
-            elif "surprise" in cl: rename_map[c] = "Surprise(%)"
-        df = df.rename(columns=rename_map).copy()
+            lc = str(c).lower()
+            if "earn" in lc and "date" in lc:
+                rename_map[c] = "Earnings Date"
+            elif "estimate" in lc and "eps" in lc:
+                rename_map[c] = "EPS Estimate"
+            elif ("reported" in lc or "actual" in lc) and "eps" in lc:
+                rename_map[c] = "Reported EPS"
+            elif "surprise" in lc:
+                rename_map[c] = "Surprise(%)"
+        df = df.rename(columns=rename_map)
 
-        # Ensure datetime + numerics
-        if "Earnings Date" in df.columns:
-            df["Earnings Date"] = pd.to_datetime(df["Earnings Date"], errors="coerce").dt.date
+        # Ensure required column exists
+        if "Earnings Date" not in df.columns:
+            # Sometimes yfinance uses 'Date' or similar
+            if "Date" in df.columns:
+                df = df.rename(columns={"Date": "Earnings Date"})
+            else:
+                return pd.DataFrame()
+
+        # Types
+        df["Earnings Date"] = pd.to_datetime(df["Earnings Date"], errors="coerce").dt.date
         for c in ("EPS Estimate", "Reported EPS", "Surprise(%)"):
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
+
         return df.dropna(subset=["Earnings Date"])
     except Exception:
         return pd.DataFrame()
-
-with st.spinner(f"Loading {TICKER} {interval} data…"):
-    stock_data = fetch_stock_data_range(TICKER, st.session_state.start_date, st.session_state.end_date, interval)
-
-if stock_data is None or stock_data.empty:
-    st.error("❌ Unable to fetch stock data for the selected range.")
-    st.stop()
-
-# ---------------- Metrics ----------------
-latest_price = stock_data["Close"].iloc[-1]
-prev_price = stock_data["Close"].iloc[-2] if len(stock_data) > 1 else latest_price
-price_change = latest_price - prev_price
-pct_change = (price_change / prev_price * 100) if prev_price else 0
-
-c1, c2, c3 = st.columns(3)
-with c1:
-    st.metric("Current Price", f"${latest_price:.2f}", f"{pct_change:+.2f}%")
-with c2:
-    st.metric("Latest Bar Range", f"${stock_data['Low'].iloc[-1]:.2f} – ${stock_data['High'].iloc[-1]:.2f}")
-with c3:
-    st.metric("Volume", f"{stock_data['Volume'].iloc[-1]:,.0f}")
 
 # ---------------- Moving average ----------------
 days_span = (st.session_state.end_date - st.session_state.start_date).days or 1
