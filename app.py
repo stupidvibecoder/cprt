@@ -236,14 +236,14 @@ st.header("Risk-neutral density (3D)")
 cA,cB,cC,cD = st.columns([1.4,1.4,1.4,2.2])
 rf_pct = cA.number_input("Risk-free rate (annual, %)", value=4.0, step=0.25, min_value=0.0, max_value=15.0)
 n_exp = int(cB.slider("Expiries to include", min_value=2, max_value=12, value=6))
-n_strikes = int(cC.slider("Strike grid size", min_value=25, max_value=200, value=100))
-smooth = cD.checkbox("Light smoothing", value=True, help="Light pre-smoothing before curvature; helps noisy chains.")
+n_strikes = int(cC.slider("Strike grid size", min_value=25, max_value=200, value=120))
+smooth = cD.checkbox("Light smoothing", value=True, help="Pre-smooth raw call quotes before curvature.")
 
 @st.cache_data(ttl=300)
 def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
     """
     Build strike×maturity surface of risk-neutral density from call prices.
-    Uses a rolling quadratic fit for stable second derivative.
+    Uses local cubic fits for stable second derivatives; falls back to butterfly FD.
     Returns: K_grid (nK,), T_arr (nExp,), Z (nExp x nK) normalized to [0,1].
     """
     t = yf.Ticker(ticker)
@@ -292,39 +292,41 @@ def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
             "callPrice": pd.to_numeric(price, errors="coerce")
         }).dropna()
         df = df[df["callPrice"] > 0].sort_values("strike")
-        if df.empty: continue
+        if df.empty or len(df) < 6:   # need enough points
+            continue
 
         # remove price outliers
         lo, hi = df["callPrice"].quantile([0.01, 0.99])
         df = df[(df["callPrice"] >= lo) & (df["callPrice"] <= hi)]
-        if df.empty: continue
+        if df.empty or len(df) < 6:
+            continue
 
         chains[ed] = df
         K_all.extend(df["strike"].tolist())
 
-    if not chains: return None
+    if not chains:
+        return None
 
-    # adaptive strike window
+    # adaptive strike window (wider for AAPL)
     Kmin = float(np.percentile(K_all, 1))
     Kmax = float(np.percentile(K_all, 99))
     if S0:
-        Kmin = max(Kmin, 0.3 * S0)
-        Kmax = min(Kmax, 2.0 * S0)
+        Kmin = max(Kmin, 0.2 * S0)
+        Kmax = min(Kmax, 3.0 * S0)
     if Kmax <= Kmin: return None
     K_grid = np.linspace(Kmin, Kmax, nK)
 
-    # rolling quadratic for second derivative
-    def quad_second_derivative(K_raw, C_raw, K_eval, win=9):
-        win = int(win) if int(win) % 2 == 1 else int(win)+1  # force odd
+    # local cubic second derivative at evaluation K
+    def local_cubic_dd(Kraw, Craw, K_eval, win=11):
+        win = int(win) if int(win) % 2 == 1 else int(win)+1  # odd
         out = np.zeros(len(K_eval))
         for i, Ke in enumerate(K_eval):
-            idx = np.argsort(np.abs(K_raw - Ke))[:max(win, 5)]
-            Kw = K_raw[idx]; Cw = C_raw[idx]
-            A = np.vstack([Kw**2, Kw, np.ones_like(Kw)]).T
+            idx = np.argsort(np.abs(Kraw - Ke))[:max(win, 7)]
+            Kw, Cw = Kraw[idx], Craw[idx]
+            A = np.vstack([Kw**3, Kw**2, Kw, np.ones_like(Kw)]).T
             try:
-                coeffs, *_ = np.linalg.lstsq(A, Cw, rcond=None)
-                a = coeffs[0]
-                out[i] = 2.0 * a
+                a3, a2, _, _ = np.linalg.lstsq(A, Cw, rcond=None)[0]
+                out[i] = 6.0 * a3 * Ke + 2.0 * a2  # d2/dK2 at Ke
             except Exception:
                 out[i] = 0.0
         return out
@@ -336,28 +338,40 @@ def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
         Craw = df["callPrice"].to_numpy()
         order = np.argsort(Kraw); Kraw = Kraw[order]; Craw = Craw[order]
 
-        # optional pre-smooth
+        # optional pre-smooth to kill spiky quotes
         if smooth and len(Craw) >= 5:
             Craw = pd.Series(Craw).rolling(5, center=True, min_periods=1).median().to_numpy()
 
-        Cpp_grid = quad_second_derivative(Kraw, Craw, K_grid, win=9 if len(Kraw)>=9 else 7)
+        # primary: local cubic curvature
+        Cpp = local_cubic_dd(Kraw, Craw, K_grid, win=11 if len(Kraw)>=11 else 9)
+
+        # fallback: butterfly on uniform grid if curvature near-zero
+        if np.allclose(Cpp, 0, atol=1e-12):
+            Ck = np.interp(K_grid, Kraw, Craw)
+            dK = K_grid[1] - K_grid[0]
+            Cpp_fd = np.zeros_like(Ck)
+            Cpp_fd[1:-1] = (Ck[:-2] - 2*Ck[1:-1] + Ck[2:]) / (dK**2)
+            Cpp = Cpp_fd
 
         T = max((ed - today).days, 1) / 365.25
-        q = np.exp(r*T) * Cpp_grid
-        q = np.clip(q, 0.0, None)  # BL density >= 0
+        q = np.exp(r*T) * Cpp
+        q = np.clip(q, 0.0, None)   # BL density >= 0
         Z_rows.append(q); T_list.append(T)
 
-    if not Z_rows: return None
-    Z = np.array(Z_rows)
+    if not Z_rows:
+        return None
+
+    Z = np.array(Z_rows)         # (nExp, nK)
     T_arr = np.array(T_list)
 
-    # sort by maturity & normalize
+    # sort by maturity & normalize to [0,1] (avoid flat color)
     order = np.argsort(T_arr)
     T_arr = T_arr[order]; Z = Z[order,:]
     zmax = float(np.nanmax(Z))
     if zmax > 0: Z = Z / zmax
+    else:       Z = np.zeros_like(Z)
 
-    if Z.shape[0] < 2 or Z.shape[1] < 2:  # need at least 2x2 to render surface
+    if Z.shape[0] < 2 or Z.shape[1] < 2:  # need at least 2x2
         return None
     return K_grid, T_arr, Z
 
@@ -395,6 +409,6 @@ else:
 
     st.caption(
         "RND via Breeden–Litzenberger: q(K,T) = e^{rT} · ∂²C/∂K². "
-        "We fit a local quadratic to call prices vs strike per expiry to obtain stable curvature, "
-        "clip negatives to 0, and normalize densities for visualization."
+        "We use local cubic fits (stable with sparse strikes), fall back to a butterfly second difference if needed, "
+        "clip negatives, and normalize to [0,1] for visualization."
     )
