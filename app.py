@@ -5,8 +5,8 @@ import plotly.graph_objs as go
 from datetime import date, timedelta
 
 # ---------------- Page ----------------
-st.set_page_config(page_title="Copart (CPRT) Stock Chart", layout="wide")
-st.title("Stock Price Chart")
+st.set_page_config(page_title="Copart Data", layout="wide")
+st.title("Stock Price")
 
 TICKER = "CPRT"
 
