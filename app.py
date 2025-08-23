@@ -36,12 +36,20 @@ if clicked:
         st.session_state.end_date = today
         st.session_state.start_date = today - timedelta(days=span)
 
-start_input = row[8].date_input("Start date",
-    value=st.session_state.start_date, min_value=date(1990,1,1),
-    max_value=today, label_visibility="collapsed")
-end_input = row[9].date_input("End date",
-    value=st.session_state.end_date, min_value=start_input,
-    max_value=today, label_visibility="collapsed")
+start_input = row[8].date_input(
+    "Start date",
+    value=st.session_state.start_date,
+    min_value=date(1990,1,1),
+    max_value=today,
+    label_visibility="collapsed",
+)
+end_input = row[9].date_input(
+    "End date",
+    value=st.session_state.end_date,
+    min_value=start_input,
+    max_value=today,
+    label_visibility="collapsed",
+)
 if start_input > end_input:
     start_input, end_input = end_input, start_input
 st.session_state.start_date, st.session_state.end_date = start_input, end_input
@@ -177,7 +185,8 @@ st.markdown(
     f"<div style='font-size:14px;'><b>High:</b> ${float(stock_data.loc[hi_ts,'Close']):,.2f} "
     f"(<span style='color:#888'>{hi_ts:%Y-%m-%d %H:%M}</span>) &nbsp;|&nbsp; "
     f"<b>Low:</b> ${float(stock_data.loc[lo_ts,'Close']):,.2f} "
-    f"(<span style='color:#888'>{lo_ts:%Y-%m-%d %H:%M}</span>)</div>", unsafe_allow_html=True
+    f"(<span style='color:#888'>{lo_ts:%Y-%m-%d %H:%M}</span>)</div>",
+    unsafe_allow_html=True
 )
 
 # =================================================================
@@ -234,17 +243,17 @@ else:
 # =================================================================
 st.header("Risk-neutral density (3D)")
 cA,cB,cC,cD = st.columns([1.4,1.4,1.4,2.2])
-rf_pct = cA.number_input("Risk-free rate (annual, %)", value=4.0, step=0.25, min_value=0.0, max_value=15.0)
-n_exp = int(cB.slider("Expiries to include", min_value=2, max_value=12, value=6))
-n_strikes = int(cC.slider("Strike grid size", min_value=25, max_value=200, value=120))
-smooth = cD.checkbox("Light smoothing", value=True, help="Pre-smooth raw call quotes before curvature.")
+rf_pct     = cA.number_input("Risk-free rate (annual, %)", value=4.0, step=0.25, min_value=0.0, max_value=15.0)
+n_exp      = int(cB.slider("Expiries to include", min_value=2, max_value=12, value=6))
+n_strikes  = int(cC.slider("Strike grid size", min_value=25, max_value=200, value=120))
+smooth     = cD.checkbox("Light smoothing", value=True, help="Pre-smooth raw call quotes before curvature.")
 
 @st.cache_data(ttl=300)
 def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
     """
     Build strike×maturity surface of risk-neutral density from call prices.
     Uses local cubic fits for stable second derivatives; falls back to butterfly FD.
-    Returns: K_grid (nK,), T_arr (nExp,), Z (nExp x nK) normalized to [0,1].
+    Returns: K_grid (nK,), T_days (nExp, in days), Z (nExp x nK) normalized to [0,1].
     """
     t = yf.Ticker(ticker)
     expiries_raw = getattr(t, "options", [])
@@ -332,17 +341,17 @@ def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
         return out
 
     r = float(r_annual)/100.0
-    T_list, Z_rows = [], []
+    T_days_list, Z_rows = [], []
     for ed, df in chains.items():
         Kraw = df["strike"].to_numpy()
         Craw = df["callPrice"].to_numpy()
         order = np.argsort(Kraw); Kraw = Kraw[order]; Craw = Craw[order]
 
-        # optional pre-smooth to kill spiky quotes
+        # optional pre-smooth
         if smooth and len(Craw) >= 5:
             Craw = pd.Series(Craw).rolling(5, center=True, min_periods=1).median().to_numpy()
 
-        # primary: local cubic curvature
+        # primary curvature
         Cpp = local_cubic_dd(Kraw, Craw, K_grid, win=11 if len(Kraw)>=11 else 9)
 
         # fallback: butterfly on uniform grid if curvature near-zero
@@ -353,27 +362,28 @@ def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
             Cpp_fd[1:-1] = (Ck[:-2] - 2*Ck[1:-1] + Ck[2:]) / (dK**2)
             Cpp = Cpp_fd
 
-        T = max((ed - today).days, 1) / 365.25
+        T_days = max((ed - today).days, 1)  # maturity in DAYS
+        T = T_days / 365.25                 # years for discounting only
         q = np.exp(r*T) * Cpp
         q = np.clip(q, 0.0, None)   # BL density >= 0
-        Z_rows.append(q); T_list.append(T)
+        Z_rows.append(q); T_days_list.append(T_days)
 
     if not Z_rows:
         return None
 
-    Z = np.array(Z_rows)         # (nExp, nK)
-    T_arr = np.array(T_list)
+    Z = np.array(Z_rows)                 # (nExp, nK)
+    T_days_arr = np.array(T_days_list)   # maturity axis in days
 
-    # sort by maturity & normalize to [0,1] (avoid flat color)
-    order = np.argsort(T_arr)
-    T_arr = T_arr[order]; Z = Z[order,:]
+    # sort by maturity & normalize to [0,1]
+    order = np.argsort(T_days_arr)
+    T_days_arr = T_days_arr[order]; Z = Z[order,:]
     zmax = float(np.nanmax(Z))
     if zmax > 0: Z = Z / zmax
     else:       Z = np.zeros_like(Z)
 
-    if Z.shape[0] < 2 or Z.shape[1] < 2:  # need at least 2x2
+    if Z.shape[0] < 2 or Z.shape[1] < 2:
         return None
-    return K_grid, T_arr, Z
+    return K_grid, T_days_arr, Z
 
 with st.spinner("Estimating risk-neutral density from AAPL options…"):
     rnd = get_rnd_surface(TICKER, n_exp, n_strikes, rf_pct)
@@ -381,8 +391,8 @@ with st.spinner("Estimating risk-neutral density from AAPL options…"):
 if rnd is None:
     st.warning("Could not build the RND surface (insufficient option data). Try fewer expiries or a smaller grid.")
 else:
-    K_grid, T_arr, Z = rnd
-    X, Y = np.meshgrid(K_grid, T_arr)
+    K_grid, T_days, Z = rnd
+    X, Y = np.meshgrid(K_grid, T_days)  # Y now in DAYS
 
     colorscale = [
         [0.00, "#2c7bb6"], [0.25, "#91bfdb"],
@@ -397,10 +407,10 @@ else:
     )
     fig3d = go.Figure(data=[surf])
     fig3d.update_layout(
-        title="Risk-neutral density surface — x: Strike, y: Maturity (years), z: Density",
+        title="Risk-neutral density surface — x: Strike, y: Maturity (days), z: Density",
         scene=dict(
             xaxis_title="Strike (K)",
-            yaxis_title="Maturity (years)",
+            yaxis_title="Maturity (days)",
             zaxis_title="Risk-neutral density q(K,T) (normalized)",
         ),
         height=700, template="plotly_white", margin=dict(l=0, r=0, t=50, b=0),
@@ -409,6 +419,8 @@ else:
 
     st.caption(
         "RND via Breeden–Litzenberger: q(K,T) = e^{rT} · ∂²C/∂K². "
-        "We use local cubic fits (stable with sparse strikes), fall back to a butterfly second difference if needed, "
-        "clip negatives, and normalize to [0,1] for visualization."
+        "We use local cubic fits (stable with sparse strikes) with a butterfly fallback, "
+        "clip negatives, and normalize to [0,1]. Maturity axis is shown in days."
     )
+
+# ======================= End of app.py =======================
