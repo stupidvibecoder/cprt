@@ -1,4 +1,59 @@
-aapl:
+cprt:
+1. company factors (micro):
+  - auction volumes
+    - vehicles sold is the lifeblood
+      - driven by insurance write-offs (accidents, weather events, & total lossses)
+  - take rate/fee growth 
+    - higher service fees => margin expansion
+  - geographic expansion
+    - us core -> growth into germany, uk, spain, & brazil
+  - new yard openings = capacity => higher future volumes
+  - technology/platform
+    - digital auctions, bidding algorithms, ai for damage assessment
+    - more buyers from emerging markets => higher demand for salvaged cars
+  - balance sheet strength
+    - no debt, strong fcfs, large land bank
+    - conservative model is prized
+2. industry & competitive dynamics (meso):
+  - insurance industry trends 
+    - coparts main customers are auto insurers (state farm, progressive, & allstate)
+    - if insurers declare mroe cars "totaled," CPRT benefits
+  - vehicle prices/repair costs
+    - high new & used car prices push insurers to total vehicles more often 
+    - expensive parts + labor => more salvage volume
+  - competition
+    - international auto auctions (RBA) is the main competitor
+    - market share battles influence margins and volumes
+  - regulatory environment 
+    - salvage title laws, export restrictions, environmental regulations
+3. market-wide forces (macro):
+  - auto market health
+    - strong demand for used cars boosts resale values of salvage vehicles
+    - weak auto market reduces buyer appetite
+  - interest rates & credit 
+    - higher rates make car loans more expensive => more defaults => more repossesions (extra supply)
+  - weather & catastrophes
+    - hurricanes, floods, & hailstorms => spike in total-loss claims
+  - global trade
+    - salvage buyers export cars to nigeria, e. europe, & la
+    - strong usd => weaker demand abroad
+4. market structure/flow factors:
+  - index fund in/outflows directly impact demand (s&p 500)
+  - growth stock characteristics
+    - trades at a premium multiple due to steady growth and moat
+    - if growth/momentum etfs are sold, copart drops with them
+  - short interest
+    - low, but some traders short on valuation concerns
+  - liquidity & volatility
+    - cprt has less volume, so block trades can move it sharply
+5. exogenous shocks:
+  - natural disasters
+  - supply chain/auto manufacturing 
+  - insurance regulation
+    - "total losses" classification
+  - global political risks  
+
+aapl/tech:
 1. company factors (micro):
   - earnings/guidance
     - fwd guidance
@@ -26,21 +81,3 @@ aapl:
   - gamma flows
   - hedge fund positioning
   - retail sentiment
-
-cprt:
-1. company factors (micro)
-  - auction volumes
-    - vehicles sold is the lifeblood
-      - driven by insurance write-offs (accidents, weather events, & total lossses)
-  - take rate/fee growth 
-    - higher service fees => margin expansion
-  - geographic expansion
-    - us core -> growth into germany, uk, spain, & brazil
-  - new yard openings = capacity => higher future volumes
-  - technology/platform
-    - digital auctions, bidding algorithms, ai for damage assessment
-    - more buyers from emerging markets => higher demand for salvaged cars
-  - balance sheet strength
-    - no debt, strong fcfs, large land bank
-    - conservative model is prized
-2. 
