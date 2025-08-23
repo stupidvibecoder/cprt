@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -5,55 +6,45 @@ import yfinance as yf
 import plotly.graph_objs as go
 from datetime import date, timedelta
 
-# ============================== Page ==============================
-st.set_page_config(page_title="Copart (CPRT) Dashboard", layout="wide")
-st.title("Stock Price Chart")
-
+# -------------------- App constants --------------------
 TICKER = "CPRT"
-today = date.today()
+TODAY = date.today()
 
-# ======================= Session defaults ========================
-if "start_date" not in st.session_state:
-    st.session_state.start_date = today - timedelta(days=30)  # default 1M
-if "end_date" not in st.session_state:
-    st.session_state.end_date = today
+# -------------------- Page config ----------------------
+st.set_page_config(page_title=f"{TICKER} Dashboard", layout="wide")
 
-# ============= One-line presets + Start/End date inputs ==========
-row = st.columns([1,1,1,1,1,1,1,1,2.3,2.3])
-presets = [("1D",1),("5D",5),("1M",30),("3M",90),("6M",180),("1Y",365),("5Y",365*5),("YTD","ytd")]
-
-clicked = None
-for i,(label,span) in enumerate(presets):
-    if row[i].button(label): clicked = (label,span)
-
-if clicked:
-    _, span = clicked
-    if span == "ytd":
-        st.session_state.start_date = date(today.year,1,1)
-        st.session_state.end_date = today
-    else:
-        st.session_state.end_date = today
-        st.session_state.start_date = today - timedelta(days=span)
-
-start_input = row[8].date_input(
-    "Start date",
-    value=st.session_state.start_date,
-    min_value=date(1990,1,1),
-    max_value=today,
-    label_visibility="collapsed",
+# -------------------- Sidebar Nav (styled) -------------
+NAV_ITEMS = ["Price chart", "Comparable performance", "Risk-neutral density (3D)"]
+st.markdown(
+    """
+    <style>
+      /* sidebar styling */
+      section[data-testid="stSidebar"] > div {padding-top: 1rem;}
+      .nav-title {font-weight: 700; font-size: 1.1rem; letter-spacing: .3px; margin: .2rem 0 0.6rem 0;}
+      .nav-item {
+        padding: 0.55rem 0.8rem; border-radius: 10px; margin-bottom: .25rem;
+        cursor: pointer; font-weight: 600; color: #cbd5e1; border: 1px solid rgba(148,163,184,.15);
+      }
+      .nav-item:hover {background: rgba(148,163,184,.12); color: #fff; border-color: rgba(148,163,184,.35);}
+      .nav-item.active {background: #2563eb22; border-color: #2563eb66; color: #e5edff;}
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
-end_input = row[9].date_input(
-    "End date",
-    value=st.session_state.end_date,
-    min_value=start_input,
-    max_value=today,
-    label_visibility="collapsed",
-)
-if start_input > end_input:
-    start_input, end_input = end_input, start_input
-st.session_state.start_date, st.session_state.end_date = start_input, end_input
 
-# ====================== Interval chooser =========================
+with st.sidebar:
+    st.markdown(f"<div class='nav-title'>{TICKER} Dashboard</div>", unsafe_allow_html=True)
+    # radio gives us state; we'll render custom look below
+    choice = st.radio(" ", NAV_ITEMS, index=0, label_visibility="collapsed")
+
+    # pretty labels mirroring the radio selection
+    pretty = []
+    for name in NAV_ITEMS:
+        klass = "nav-item active" if name == choice else "nav-item"
+        pretty.append(f"<div class='{klass}'>{name}</div>")
+    st.markdown("<br/>".join(pretty), unsafe_allow_html=True)
+
+# ====================== Shared helpers ======================
 def choose_interval(s: date, e: date) -> str:
     d = (e - s).days or 1
     if d <= 7: return "5m"
@@ -62,9 +53,6 @@ def choose_interval(s: date, e: date) -> str:
     if d <= 365*5: return "1wk"
     return "1mo"
 
-interval = choose_interval(st.session_state.start_date, st.session_state.end_date)
-
-# ====================== Data fetch helpers =======================
 @st.cache_data(ttl=120)
 def fetch_stock_data_range(ticker: str, s: date, e: date, interval: str):
     t = yf.Ticker(ticker)
@@ -110,94 +98,6 @@ def fetch_earnings_df(ticker: str) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
-# ========================== Load price data ======================
-with st.spinner(f"Loading {TICKER} {interval} data…"):
-    stock_data = fetch_stock_data_range(TICKER, st.session_state.start_date, st.session_state.end_date, interval)
-if stock_data is None or stock_data.empty:
-    st.error("❌ Unable to fetch stock data for the selected range."); st.stop()
-
-# ============================ Metrics ============================
-latest_price = stock_data["Close"].iloc[-1]
-prev_price   = stock_data["Close"].iloc[-2] if len(stock_data)>1 else latest_price
-pct_change   = ((latest_price - prev_price) / prev_price * 100) if prev_price else 0
-
-c1,c2,c3 = st.columns(3)
-with c1: st.metric("Current Price", f"${latest_price:.2f}", f"{pct_change:+.2f}%")
-with c2: st.metric("Latest Bar Range", f"${stock_data['Low'].iloc[-1]:.2f} – ${stock_data['High'].iloc[-1]:.2f}")
-with c3: st.metric("Volume", f"{stock_data['Volume'].iloc[-1]:,.0f}")
-
-# ====================== Options: MA & Earnings ===================
-days_span = (st.session_state.end_date - st.session_state.start_date).days or 1
-if   days_span <= 7:    default_ma = None
-elif days_span <= 90:   default_ma = 9
-elif days_span <= 365:  default_ma = 50
-else:                   default_ma = 100
-
-show_ma = show_earn = False
-ma_data = None
-if default_ma is not None:
-    show_ma = st.checkbox(f"Show {default_ma}-period Moving Average", value=False)
-    if show_ma: ma_data = stock_data["Close"].rolling(window=default_ma).mean()
-show_earn = st.checkbox("Earnings calendar", value=False)
-
-# ========================= Price chart ===========================
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=stock_data.index, y=stock_data["Close"], mode="lines",
-                         name="Close (Adj.)", line=dict(width=2), connectgaps=True,
-                         hovertemplate="Date: %{x}<br>Price: $%{y:.2f}<extra></extra>"))
-if show_ma and ma_data is not None:
-    fig.add_trace(go.Scatter(x=stock_data.index, y=ma_data, mode="lines",
-                             name=f"{default_ma}-period MA", line=dict(width=2, dash="dash"),
-                             connectgaps=True, hovertemplate="Date: %{x}<br>MA: $%{y:.2f}<extra></extra>"))
-if show_earn:
-    earn_df = fetch_earnings_df(TICKER)
-    if not earn_df.empty:
-        m = ((earn_df["Earnings Date"]>=st.session_state.start_date) &
-             (earn_df["Earnings Date"]<=st.session_state.end_date))
-        ewin = earn_df.loc[m].copy()
-        if not ewin.empty:
-            daily_close = stock_data["Close"].resample("D").last().ffill()
-            xs,ys,txt = [],[],[]
-            for _,r in ewin.iterrows():
-                d = pd.Timestamp(r["Earnings Date"])
-                y = float(daily_close.asof(d)) if not daily_close.empty else float(stock_data["Close"].iloc[-1])
-                est,rep,spr = r.get("EPS Estimate"), r.get("Reported EPS"), r.get("Surprise(%)")
-                if (spr is None or pd.isna(spr)) and (pd.notna(est) and pd.notna(rep) and est):
-                    spr = (rep/est - 1.0)*100.0
-                hover = f"Earnings: {d:%Y-%m-%d}<br>Est EPS: {est if pd.notna(est) else '—'}<br>Actual EPS: {rep if pd.notna(rep) else '—'}"
-                if spr is not None and pd.notna(spr): hover += f"<br>Surprise: {spr:.2f}%"
-                xs.append(d); ys.append(y); txt.append(hover)
-            fig.add_trace(go.Scatter(x=xs, y=ys, mode="markers", name="Earnings",
-                                     marker=dict(size=9, color="crimson", symbol="diamond", line=dict(width=1)),
-                                     hovertemplate="%{text}<extra></extra>", text=txt))
-rb = []
-if days_span <= 120: rb = [dict(bounds=["sat","mon"]), dict(bounds=[16,9.5], pattern="hour")]
-fig.update_layout(title=f"{TICKER} — {st.session_state.start_date:%Y-%m-%d} → {st.session_state.end_date:%Y-%m-%d}",
-    xaxis_title="Date", yaxis_title="Price ($)", height=520, template="plotly_white", hovermode="x unified",
-    yaxis=dict(zeroline=False, tickprefix="$", separatethousands=True),
-    xaxis=dict(rangeslider=dict(visible=days_span>7), rangebreaks=rb))
-st.plotly_chart(fig, use_container_width=True)
-
-# ======================== High/Low readout =======================
-hi_ts = stock_data["Close"].idxmax(); lo_ts = stock_data["Close"].idxmin()
-st.markdown(
-    f"<div style='font-size:14px;'><b>High:</b> ${float(stock_data.loc[hi_ts,'Close']):,.2f} "
-    f"(<span style='color:#888'>{hi_ts:%Y-%m-%d %H:%M}</span>) &nbsp;|&nbsp; "
-    f"<b>Low:</b> ${float(stock_data.loc[lo_ts,'Close']):,.2f} "
-    f"(<span style='color:#888'>{lo_ts:%Y-%m-%d %H:%M}</span>)</div>",
-    unsafe_allow_html=True
-)
-
-# =================================================================
-#                     Comparable performance
-# =================================================================
-st.header("Comparable performance")
-COMPARATORS = {
-    "S&P 500": "^GSPC", "S&P Industrial ETF": "XLI", "Cintas": "CTAS",
-    "Ritchie Bros.": "RBA", "Global Payments": "GPN", "TRI": "Thomson Reuters", "UL Solutions": "ULS",
-}
-choices = st.multiselect("Compare against (multi-select):", options=list(COMPARATORS.keys()), default=[])
-
 @st.cache_data(ttl=120)
 def fetch_close_series(sym: str, s: date, e: date, interval: str):
     df = fetch_stock_data_range(sym, s, e, interval)
@@ -207,298 +107,341 @@ def fetch_close_series(sym: str, s: date, e: date, interval: str):
         srs.index = srs.index.tz_convert(None)
     return srs
 
-cprt_close = fetch_close_series(TICKER, st.session_state.start_date, st.session_state.end_date, interval)
-if cprt_close is None or cprt_close.empty:
-    st.warning("No cprt data for the selected range.")
-else:
-    base = float(cprt_close.iloc[0])
-    df_pct = pd.DataFrame({"cprt": (cprt_close/base - 1)*100})
+# ====================== Section 1: Price ======================
+def render_price_section():
+    st.title("Stock Price Chart")
+
+    # section state
+    if "start_date" not in st.session_state:
+        st.session_state.start_date = TODAY - timedelta(days=30)
+    if "end_date" not in st.session_state:
+        st.session_state.end_date = TODAY
+
+    # top row of quick buttons + date inputs (unchanged layout)
+    row = st.columns([1,1,1,1,1,1,1,1,2.3,2.3])
+    presets = [("1D",1),("5D",5),("1M",30),("3M",90),("6M",180),("1Y",365),("5Y",365*5),("YTD","ytd")]
+    clicked = None
+    for i,(label,span) in enumerate(presets):
+        if row[i].button(label): clicked = (label,span)
+    if clicked:
+        _, span = clicked
+        if span == "ytd":
+            st.session_state.start_date = date(TODAY.year,1,1); st.session_state.end_date = TODAY
+        else:
+            st.session_state.end_date = TODAY
+            st.session_state.start_date = TODAY - timedelta(days=span)
+
+    start_input = row[8].date_input("Start date", value=st.session_state.start_date,
+                                    min_value=date(1990,1,1), max_value=TODAY, label_visibility="collapsed")
+    end_input   = row[9].date_input("End date", value=st.session_state.end_date,
+                                    min_value=start_input, max_value=TODAY, label_visibility="collapsed")
+    if start_input > end_input: start_input, end_input = end_input, start_input
+    st.session_state.start_date, st.session_state.end_date = start_input, end_input
+
+    interval = choose_interval(start_input, end_input)
+
+    with st.spinner(f"Loading {TICKER} {interval} data…"):
+        stock_data = fetch_stock_data_range(TICKER, start_input, end_input, interval)
+    if stock_data is None or stock_data.empty:
+        st.error("❌ Unable to fetch stock data for the selected range."); st.stop()
+
+    # metrics (unchanged)
+    latest = stock_data["Close"].iloc[-1]
+    prev   = stock_data["Close"].iloc[-2] if len(stock_data)>1 else latest
+    pct    = ((latest-prev)/prev*100) if prev else 0
+    c1,c2,c3 = st.columns(3)
+    with c1: st.metric("Current Price", f"${latest:.2f}", f"{pct:+.2f}%")
+    with c2: st.metric("Latest Bar Range", f"${stock_data['Low'].iloc[-1]:.2f} – ${stock_data['High'].iloc[-1]:.2f}")
+    with c3: st.metric("Volume", f"{stock_data['Volume'].iloc[-1]:,.0f}")
+
+    # MA + earnings (unchanged)
+    span_days = (end_input - start_input).days or 1
+    if   span_days <= 7:  default_ma = None
+    elif span_days <= 90: default_ma = 9
+    elif span_days <= 365: default_ma = 50
+    else: default_ma = 100
+
+    show_ma = show_earn = False
+    ma_data = None
+    if default_ma is not None:
+        show_ma = st.checkbox(f"Show {default_ma}-period Moving Average", value=False)
+        if show_ma: ma_data = stock_data["Close"].rolling(window=default_ma).mean()
+    show_earn = st.checkbox("Earnings calendar", value=False)
+
+    # main chart (unchanged)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=stock_data.index, y=stock_data["Close"], mode="lines",
+                             name="Close (Adj.)", line=dict(width=2), connectgaps=True,
+                             hovertemplate="Date: %{x}<br>Price: $%{y:.2f}<extra></extra>"))
+    if show_ma and ma_data is not None:
+        fig.add_trace(go.Scatter(x=stock_data.index, y=ma_data, mode="lines",
+                                 name=f"{default_ma}-period MA", line=dict(width=2, dash="dash"),
+                                 connectgaps=True, hovertemplate="Date: %{x}<br>MA: $%{y:.2f}<extra></extra>"))
+    if show_earn:
+        earn_df = fetch_earnings_df(TICKER)
+        if not earn_df.empty:
+            m = ((earn_df["Earnings Date"]>=start_input) & (earn_df["Earnings Date"]<=end_input))
+            ewin = earn_df.loc[m].copy()
+            if not ewin.empty:
+                daily_close = stock_data["Close"].resample("D").last().ffill()
+                xs,ys,txt = [],[],[]
+                for _,r in ewin.iterrows():
+                    d = pd.Timestamp(r["Earnings Date"])
+                    y = float(daily_close.asof(d)) if not daily_close.empty else float(stock_data["Close"].iloc[-1])
+                    est,rep,spr = r.get("EPS Estimate"), r.get("Reported EPS"), r.get("Surprise(%)")
+                    if (spr is None or pd.isna(spr)) and (pd.notna(est) and pd.notna(rep) and est):
+                        spr = (rep/est - 1.0)*100.0
+                    hover = f"Earnings: {d:%Y-%m-%d}<br>Est EPS: {est if pd.notna(est) else '—'}<br>Actual EPS: {rep if pd.notna(rep) else '—'}"
+                    if spr is not None and pd.notna(spr): hover += f"<br>Surprise: {spr:.2f}%"
+                    xs.append(d); ys.append(y); txt.append(hover)
+                fig.add_trace(go.Scatter(x=xs, y=ys, mode="markers", name="Earnings",
+                                         marker=dict(size=9, color="crimson", symbol="diamond", line=dict(width=1)),
+                                         hovertemplate="%{text}<extra></extra>", text=txt))
+    rb = []
+    if span_days <= 120: rb = [dict(bounds=["sat","mon"]), dict(bounds=[16,9.5], pattern="hour")]
+    fig.update_layout(title=f"{TICKER} — {start_input:%Y-%m-%d} → {end_input:%Y-%m-%d}",
+        xaxis_title="Date", yaxis_title="Price ($)", height=520, template="plotly_white", hovermode="x unified",
+        yaxis=dict(zeroline=False, tickprefix="$", separatethousands=True),
+        xaxis=dict(rangeslider=dict(visible=span_days>7), rangebreaks=rb))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # high/low (unchanged)
+    hi_ts = stock_data["Close"].idxmax(); lo_ts = stock_data["Close"].idxmin()
+    st.markdown(
+        f"<div style='font-size:14px;'><b>High:</b> ${float(stock_data.loc[hi_ts,'Close']):,.2f} "
+        f"(<span style='color:#888'>{hi_ts:%Y-%m-%d %H:%M}</span>) &nbsp;|&nbsp; "
+        f"<b>Low:</b> ${float(stock_data.loc[lo_ts,'Close']):,.2f} "
+        f"(<span style='color:#888'>{lo_ts:%Y-%m-%d %H:%M}</span>)</div>",
+        unsafe_allow_html=True
+    )
+
+# ================= Section 2: Comparable performance =============
+def render_comparable_section():
+    st.header("Comparable performance")
+
+    # reuse dates from section 1 if present; else set defaults
+    start_d = st.session_state.get("start_date", TODAY - timedelta(days=30))
+    end_d   = st.session_state.get("end_date", TODAY)
+    interval = choose_interval(start_d, end_d)
+
+    COMPS = {
+        "SPX": "^GSPC", "Industrials ETF": "XLI", "RB Global": "RBA",
+        "OPENLANE": "KAR", "Cintas": "CTAS", "VSE": "VSEC", "UniFirst": "UNF",
+    }
+    choices = st.multiselect("Compare against (multi-select):", options=list(COMPS.keys()), default=[])
+
+    base_close = fetch_close_series(TICKER, start_d, end_d, interval)
+    if base_close is None or base_close.empty:
+        st.warning("No data for the selected range.")
+        return
+
+    base_val = float(base_close.iloc[0])
+    df_pct = pd.DataFrame({"CPRT": (base_close/base_val - 1)*100})
+
     for lab in choices:
-        sym = COMPARATORS[lab]
-        srs = fetch_close_series(sym, st.session_state.start_date, st.session_state.end_date, interval)
-        if srs is None or srs.empty: st.info(f"Could not load {lab}."); continue
+        sym = COMPS[lab]
+        srs = fetch_close_series(sym, start_d, end_d, interval)
+        if srs is None or srs.empty:
+            st.info(f"Could not load {lab}."); continue
         srs = srs.reindex(df_pct.index).ffill()
         df_pct[lab] = (srs/float(srs.iloc[0]) - 1)*100
 
     pfig = go.Figure()
-    pfig.add_trace(go.Scatter(x=df_pct.index, y=df_pct["cprt"], mode="lines",
-                              name="cprt", connectgaps=True,
+    pfig.add_trace(go.Scatter(x=df_pct.index, y=df_pct["CPRT"], mode="lines",
+                              name="CPRT", connectgaps=True,
                               hovertemplate="Date: %{x}<br>Change: %{y:.2f}%<extra></extra>"))
-    for lab in [c for c in df_pct.columns if c!="cprt"]:
+    for lab in [c for c in df_pct.columns if c!="CPRT"]:
         pfig.add_trace(go.Scatter(x=df_pct.index, y=df_pct[lab], mode="lines",
                                   name=lab, connectgaps=True,
                                   hovertemplate="Date: %{x}<br>Change: %{y:.2f}%<extra></extra>"))
+    span_days = (end_d - start_d).days or 1
     rb2 = []
-    if days_span <= 120: rb2 = [dict(bounds=["sat","mon"]), dict(bounds=[16,9.5], pattern="hour")]
-    pfig.update_layout(title=f"Since {st.session_state.start_date:%Y-%m-%d} (cumulative % change)",
+    if span_days <= 120: rb2 = [dict(bounds=["sat","mon"]), dict(bounds=[16,9.5], pattern="hour")]
+    pfig.update_layout(title=f"Since {start_d:%Y-%m-%d} (cumulative % change)",
         xaxis_title="Date", yaxis_title="Change (%)", template="plotly_white", hovermode="x unified", height=520,
         yaxis=dict(zeroline=True, zerolinewidth=1, zerolinecolor="#aaa", ticksuffix="%"),
         xaxis=dict(rangeslider=dict(visible=False), rangebreaks=rb2),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
     st.plotly_chart(pfig, use_container_width=True)
 
-# =================================================================
-#                 Risk-neutral density (3D) surface — CPRT options
-# =================================================================
-st.header("Risk-neutral density (3D)")
-cA,cB,cC,cD = st.columns([1.4,1.4,1.4,2.2])
-rf_pct     = cA.number_input("Risk-free rate (annual, %)", value=4.0, step=0.25, min_value=0.0, max_value=15.0)
-n_exp      = int(cB.slider("Expiries to include", min_value=2, max_value=12, value=6))
-n_strikes  = int(cC.slider("Strike grid size", min_value=25, max_value=200, value=120))
-smooth     = cD.checkbox("Light smoothing", value=True, help="Pre-smooth raw call quotes before curvature.")
+# ========== Section 3: Risk-neutral density (3D) + 2D slices =====
+def render_rnd_section():
+    st.header("Risk-neutral density (3D)")
+    cA,cB,cC,cD = st.columns([1.4,1.4,1.4,2.2])
+    rf_pct     = cA.number_input("Risk-free rate (annual, %)", value=4.0, step=0.25, min_value=0.0, max_value=15.0)
+    n_exp      = int(cB.slider("Expiries to include", min_value=2, max_value=12, value=6))
+    n_strikes  = int(cC.slider("Strike grid size", min_value=25, max_value=200, value=120))
+    smooth     = cD.checkbox("Light smoothing", value=True, help="Pre-smooth raw call quotes before curvature.")
 
-@st.cache_data(ttl=300)
-def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
-    """
-    Build strike×maturity surface of risk-neutral density from call prices.
-    Uses local cubic fits for stable second derivatives; falls back to butterfly FD.
-    Returns:
-        K_grid (nK,), T_days (nExp, in days), Z (nExp x nK) normalized to [0,1], exp_dates (list of date)
-    """
-    t = yf.Ticker(ticker)
-    expiries_raw = getattr(t, "options", [])
-    if not expiries_raw: return None
+    @st.cache_data(ttl=300)
+    def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
+        """Return K_grid, T_days (maturity), Z (norm), exp_dates"""
+        t = yf.Ticker(ticker)
+        expiries_raw = getattr(t, "options", [])
+        if not expiries_raw: return None
 
-    # nearest future expiries
-    exp_dt = []
-    for x in expiries_raw:
-        try:
-            d = pd.to_datetime(x).date()
-            if d >= today: exp_dt.append(d)
-        except Exception:
-            continue
-    exp_dt = sorted(exp_dt)[:n_expiries]
-    if not exp_dt: return None
-
-    # spot
-    spot_df = t.history(period="5d", interval="1d", auto_adjust=True)
-    S0 = float(spot_df["Close"].iloc[-1]) if not spot_df.empty else None
-
-    # collect calls
-    K_all, chains = [], {}
-    for ed in exp_dt:
-        try:
-            ch = t.option_chain(pd.to_datetime(ed).strftime("%Y-%m-%d"))
-        except Exception:
-            continue
-        if ch is None or ch.calls is None or ch.calls.empty: continue
-        calls = ch.calls.copy()
-
-        # robust price: last -> mid -> mark -> ask
-        price = calls.get("lastPrice")
-        if price is None or price.isna().all() or (price <= 0).all():
-            bid = calls.get("bid", pd.Series(dtype=float)).fillna(0.0)
-            ask = calls.get("ask", pd.Series(dtype=float)).fillna(0.0)
-            price = (bid + ask)/2.0
-        if price is None or price.isna().all() or (price <= 0).all():
-            mark = calls.get("mark")
-            if mark is not None and not mark.isna().all(): price = mark
-        if price is None or price.isna().all() or (price <= 0).all():
-            price = calls.get("ask", pd.Series(dtype=float))
-
-        df = pd.DataFrame({
-            "strike": pd.to_numeric(calls["strike"], errors="coerce"),
-            "callPrice": pd.to_numeric(price, errors="coerce")
-        }).dropna()
-        df = df[df["callPrice"] > 0].sort_values("strike")
-        if df.empty or len(df) < 6:   # need enough points
-            continue
-
-        # remove price outliers
-        lo, hi = df["callPrice"].quantile([0.01, 0.99])
-        df = df[(df["callPrice"] >= lo) & (df["callPrice"] <= hi)]
-        if df.empty or len(df) < 6:
-            continue
-
-        chains[ed] = df
-        K_all.extend(df["strike"].tolist())
-
-    if not chains:
-        return None
-
-    # adaptive strike window (wider for CPRT)
-    Kmin = float(np.percentile(K_all, 1))
-    Kmax = float(np.percentile(K_all, 99))
-    if S0:
-        Kmin = max(Kmin, 0.2 * S0)
-        Kmax = min(Kmax, 3.0 * S0)
-    if Kmax <= Kmin: return None
-    K_grid = np.linspace(Kmin, Kmax, nK)
-
-    # local cubic second derivative at evaluation K
-    def local_cubic_dd(Kraw, Craw, K_eval, win=11):
-        win = int(win) if int(win) % 2 == 1 else int(win)+1  # odd
-        out = np.zeros(len(K_eval))
-        for i, Ke in enumerate(K_eval):
-            idx = np.argsort(np.abs(Kraw - Ke))[:max(win, 7)]
-            Kw, Cw = Kraw[idx], Craw[idx]
-            A = np.vstack([Kw**3, Kw**2, Kw, np.ones_like(Kw)]).T
+        exp_dt = []
+        for x in expiries_raw:
             try:
-                a3, a2, _, _ = np.linalg.lstsq(A, Cw, rcond=None)[0]
-                out[i] = 6.0 * a3 * Ke + 2.0 * a2  # d2/dK2 at Ke
-            except Exception:
-                out[i] = 0.0
-        return out
+                d = pd.to_datetime(x).date()
+                if d >= TODAY: exp_dt.append(d)
+            except Exception: continue
+        exp_dt = sorted(exp_dt)[:n_expiries]
+        if not exp_dt: return None
 
-    r = float(r_annual)/100.0
-    T_days_list, Z_rows, exp_kept = [], [], []
-    for ed, df in chains.items():
-        Kraw = df["strike"].to_numpy()
-        Craw = df["callPrice"].to_numpy()
-        order = np.argsort(Kraw); Kraw = Kraw[order]; Craw = Craw[order]
+        spot_df = t.history(period="5d", interval="1d", auto_adjust=True)
+        S0 = float(spot_df["Close"].iloc[-1]) if not spot_df.empty else None
 
-        # optional pre-smooth
-        if smooth and len(Craw) >= 5:
-            Craw = pd.Series(Craw).rolling(5, center=True, min_periods=1).median().to_numpy()
+        K_all, chains = [], {}
+        for ed in exp_dt:
+            try:
+                ch = t.option_chain(pd.to_datetime(ed).strftime("%Y-%m-%d"))
+            except Exception: continue
+            if ch is None or ch.calls is None or ch.calls.empty: continue
+            calls = ch.calls.copy()
 
-        # primary curvature
-        Cpp = local_cubic_dd(Kraw, Craw, K_grid, win=11 if len(Kraw)>=11 else 9)
+            price = calls.get("lastPrice")
+            if price is None or price.isna().all() or (price <= 0).all():
+                bid = calls.get("bid", pd.Series(dtype=float)).fillna(0.0)
+                ask = calls.get("ask", pd.Series(dtype=float)).fillna(0.0)
+                price = (bid + ask)/2.0
+            if price is None or price.isna().all() or (price <= 0).all():
+                mark = calls.get("mark")
+                if mark is not None and not mark.isna().all(): price = mark
+            if price is None or price.isna().all() or (price <= 0).all():
+                price = calls.get("ask", pd.Series(dtype=float))
 
-        # fallback: butterfly on uniform grid if curvature near-zero
-        if np.allclose(Cpp, 0, atol=1e-12):
-            Ck = np.interp(K_grid, Kraw, Craw)
-            dK = K_grid[1] - K_grid[0]
-            Cpp_fd = np.zeros_like(Ck)
-            Cpp_fd[1:-1] = (Ck[:-2] - 2*Ck[1:-1] + Ck[2:]) / (dK**2)
-            Cpp = Cpp_fd
+            df = pd.DataFrame({
+                "strike": pd.to_numeric(calls["strike"], errors="coerce"),
+                "callPrice": pd.to_numeric(price, errors="coerce")
+            }).dropna()
+            df = df[df["callPrice"] > 0].sort_values("strike")
+            if df.empty or len(df) < 6: continue
+            lo, hi = df["callPrice"].quantile([0.01, 0.99])
+            df = df[(df["callPrice"] >= lo) & (df["callPrice"] <= hi)]
+            if df.empty or len(df) < 6: continue
 
-        T_days = max((ed - today).days, 1)  # maturity in DAYS
-        T = T_days / 365.25                 # years for discounting only
-        q = np.exp(r*T) * Cpp
-        q = np.clip(q, 0.0, None)   # BL density >= 0
+            chains[ed] = df
+            K_all.extend(df["strike"].tolist())
 
-        Z_rows.append(q); T_days_list.append(T_days); exp_kept.append(ed)
+        if not chains: return None
 
-    if not Z_rows:
-        return None
+        Kmin = float(np.percentile(K_all, 1))
+        Kmax = float(np.percentile(K_all, 99))
+        if S0:
+            Kmin = max(Kmin, 0.2 * S0)
+            Kmax = min(Kmax, 3.0 * S0)
+        if Kmax <= Kmin: return None
+        K_grid = np.linspace(Kmin, Kmax, nK)
 
-    Z = np.array(Z_rows)                 # (nExp, nK)
-    T_days_arr = np.array(T_days_list)   # maturity axis in days
-    exp_dates = np.array(exp_kept, dtype="object")
+        def local_cubic_dd(Kraw, Craw, K_eval, win=11):
+            win = int(win) if int(win) % 2 == 1 else int(win)+1
+            out = np.zeros(len(K_eval))
+            for i, Ke in enumerate(K_eval):
+                idx = np.argsort(np.abs(Kraw - Ke))[:max(win,7)]
+                Kw, Cw = Kraw[idx], Craw[idx]
+                A = np.vstack([Kw**3, Kw**2, Kw, np.ones_like(Kw)]).T
+                try:
+                    a3, a2, _, _ = np.linalg.lstsq(A, Cw, rcond=None)[0]
+                    out[i] = 6.0*a3*Ke + 2.0*a2
+                except Exception:
+                    out[i] = 0.0
+            return out
 
-    # sort by maturity & normalize to [0,1]
-    order = np.argsort(T_days_arr)
-    T_days_arr = T_days_arr[order]; Z = Z[order,:]; exp_dates = exp_dates[order]
-    zmax = float(np.nanmax(Z))
-    if zmax > 0: Z = Z / zmax
-    else:       Z = np.zeros_like(Z)
+        r = float(r_annual)/100.0
+        T_days_list, Z_rows, exp_dates = [], [], []
+        for ed, df in chains.items():
+            Kraw = df["strike"].to_numpy(); Craw = df["callPrice"].to_numpy()
+            order = np.argsort(Kraw); Kraw = Kraw[order]; Craw = Craw[order]
+            if smooth and len(Craw) >= 5:
+                Craw = pd.Series(Craw).rolling(5, center=True, min_periods=1).median().to_numpy()
+            Cpp = local_cubic_dd(Kraw, Craw, K_grid, win=11 if len(Kraw)>=11 else 9)
+            if np.allclose(Cpp, 0, atol=1e-12):
+                Ck = np.interp(K_grid, Kraw, Craw)
+                dK = K_grid[1]-K_grid[0]
+                Cpp_fd = np.zeros_like(Ck); Cpp_fd[1:-1]=(Ck[:-2]-2*Ck[1:-1]+Ck[2:])/(dK**2)
+                Cpp = Cpp_fd
 
-    if Z.shape[0] < 2 or Z.shape[1] < 2:
-        return None
-    return K_grid, T_days_arr, Z, exp_dates
+            T_days = max((ed - TODAY).days, 1)  # DAYS for axis
+            T = T_days/365.25                   # years for discounting
+            q = np.exp(r*T) * Cpp
+            q = np.clip(q, 0.0, None)
+            Z_rows.append(q); T_days_list.append(T_days); exp_dates.append(ed)
 
-with st.spinner("Estimating risk-neutral density from CPRT options…"):
-    rnd = get_rnd_surface(TICKER, n_exp, n_strikes, rf_pct)
+        if not Z_rows: return None
+        Z = np.array(Z_rows); T_days_arr = np.array(T_days_list); exp_dates = np.array(exp_dates, dtype="object")
+        order = np.argsort(T_days_arr)
+        Z = Z[order,:]; T_days_arr = T_days_arr[order]; exp_dates = exp_dates[order]
+        zmax = float(np.nanmax(Z)); Z = Z/zmax if zmax>0 else np.zeros_like(Z)
+        if Z.shape[0] < 2 or Z.shape[1] < 2: return None
+        return K_grid, T_days_arr, Z, exp_dates
 
-if rnd is None:
-    st.warning("Could not build the RND surface (insufficient option data). Try fewer expiries or a smaller grid.")
-else:
+    with st.spinner(f"Estimating risk-neutral density from {TICKER} options…"):
+        rnd = get_rnd_surface(TICKER, n_exp, n_strikes, rf_pct)
+
+    if rnd is None:
+        st.warning("Could not build the RND surface (insufficient option data). Try fewer expiries or a smaller grid.")
+        return
+
     K_grid, T_days, Z, exp_dates = rnd
-    X, Y = np.meshgrid(K_grid, T_days)  # Y now in DAYS
-
-    colorscale = [
-        [0.00, "#2c7bb6"], [0.25, "#91bfdb"],
-        [0.50, "#ffffbf"], [0.75, "#fdae61"],
-        [1.00, "#d7191c"],  # dark red = peaks
-    ]
-    surf = go.Surface(
-        x=X, y=Y, z=Z, colorscale=colorscale, cmin=0.0, cmax=1.0,
-        showscale=True, colorbar=dict(title="Density (norm)"),
-        contours=dict(z=dict(show=True, usecolormap=True, highlightcolor="black", project_z=True)),
-        opacity=0.97,
-    )
+    X, Y = np.meshgrid(K_grid, T_days)
+    colorscale = [[0.00,"#2c7bb6"],[0.25,"#91bfdb"],[0.50,"#ffffbf"],[0.75,"#fdae61"],[1.00,"#d7191c"]]
+    surf = go.Surface(x=X, y=Y, z=Z, colorscale=colorscale, cmin=0.0, cmax=1.0,
+                      showscale=True, colorbar=dict(title="Density (norm)"),
+                      contours=dict(z=dict(show=True, usecolormap=True, highlightcolor="black", project_z=True)),
+                      opacity=0.97)
     fig3d = go.Figure(data=[surf])
     fig3d.update_layout(
         title="Risk-neutral density surface — x: Strike, y: Maturity (days), z: Density",
-        scene=dict(
-            xaxis_title="Strike (K)",
-            yaxis_title="Maturity (days)",
-            zaxis_title="Risk-neutral density q(K,T) (normalized)",
-        ),
-        height=700, template="plotly_white", margin=dict(l=0, r=0, t=50, b=0),
+        scene=dict(xaxis_title="Strike (K)", yaxis_title="Maturity (days)", zaxis_title="Risk-neutral density q(K,T) (normalized)"),
+        height=700, template="plotly_white", margin=dict(l=0,r=0,t=50,b=0),
     )
     st.plotly_chart(fig3d, use_container_width=True)
+    st.caption("RND via Breeden–Litzenberger: q(K,T)=e^{rT}·∂²C/∂K². Local cubic fits + butterfly fallback; negatives clipped and densities normalized.")
 
-    st.caption(
-        "RND via Breeden–Litzenberger: q(K,T) = e^{rT} · ∂²C/∂K². "
-        "We use local cubic fits with butterfly fallback, clip negatives, normalize to [0,1]. Maturity axis in days."
-    )
-
-    # =================================================================
-    #                    NEW: Two 2D views under the 3D
-    # =================================================================
+    # --------- Two 2D cross-sections (unchanged in spirit) ----------
     st.subheader("RND cross-sections")
-
     left, right = st.columns(2)
 
-    # ------- Left: maturity (days) vs argmax strike ("Option Market Price Estimate")
+    # Left: maturity (days) vs strike at max density
     with left:
-        tf_opts = {
-            "All maturities": None,
-            "0–30 days": 30,
-            "0–60 days": 60,
-            "0–90 days": 90,
-            "0–180 days": 180,
-            "0–365 days": 365,
-        }
-        sel_tf = st.selectbox("Timeframe (x-axis filter):", list(tf_opts.keys()), index=0)
+        tf_opts = {"All maturities": None, "0–30 days": 30, "0–60 days": 60, "0–90 days": 90, "0–180 days": 180, "0–365 days": 365}
+        sel_tf = st.selectbox("Timeframe (x-axis filter):", list(tf_opts.keys()), index=0, key="tf_left")
         limit = tf_opts[sel_tf]
-
-        # find strike of max density per expiry row
-        idx_max = np.argmax(Z, axis=1)            # (nExp,)
-        K_star = K_grid[idx_max]                  # strike at max density
-        T_plot = T_days.copy()
-        K_plot = K_star.copy()
-
+        idx_max = np.argmax(Z, axis=1)
+        K_star = K_grid[idx_max]
+        T_plot = T_days.copy(); K_plot = K_star.copy()
         if limit is not None:
-            mask = T_plot <= limit
-            T_plot = T_plot[mask]
-            K_plot = K_plot[mask]
-
+            m = T_plot <= limit
+            T_plot, K_plot = T_plot[m], K_plot[m]
         fig_left = go.Figure()
-        fig_left.add_trace(go.Scatter(
-            x=T_plot, y=K_plot, mode="lines+markers",
-            name="Max-density strike",
-            hovertemplate="Maturity: %{x}d<br>Strike: $%{y:.2f}<extra></extra>"
-        ))
-        fig_left.update_layout(
-            title="Option Market Price Estimate",
-            xaxis_title="Maturity (days)",
-            yaxis_title="Strike with highest RND (K*)",
-            template="plotly_white",
-            height=420
-        )
+        fig_left.add_trace(go.Scatter(x=T_plot, y=K_plot, mode="lines+markers", name="Max-density strike",
+                                      hovertemplate="Maturity: %{x}d<br>Strike: $%{y:.2f}<extra></extra>"))
+        fig_left.update_layout(title="Option Market Price Estimate", xaxis_title="Maturity (days)",
+                               yaxis_title="Strike with highest RND (K*)", template="plotly_white", height=420)
         st.plotly_chart(fig_left, use_container_width=True)
 
-    # ------- Right: strike vs density for a chosen single expiry
+    # Right: strike vs density for a selected expiry
     with right:
-        # Build a label list like "2025-09-19 (28d)"
-        labels = [f"{d} ({int(t)}d)" for d, t in zip(exp_dates, T_days)]
-        sel_label = st.selectbox("Expiry to slice:", labels, index=0)
+        labels = [f"{d} ({int(t)}d)" for d,t in zip(exp_dates, T_days)]
+        sel_label = st.selectbox("Expiry to slice:", labels, index=0, key="slice_right")
         sel_idx = labels.index(sel_label)
-
-        z_row = Z[sel_idx, :]
+        z_row = Z[sel_idx,:]
         fig_right = go.Figure()
-        fig_right.add_trace(go.Scatter(
-            x=K_grid, y=z_row, mode="lines",
-            name=str(exp_dates[sel_idx]),
-            hovertemplate="Strike: $%{x:.2f}<br>Density: %{y:.3f}<extra></extra>"
-        ))
-        # mark the max point on this curve
+        fig_right.add_trace(go.Scatter(x=K_grid, y=z_row, mode="lines", name=str(exp_dates[sel_idx]),
+                                       hovertemplate="Strike: $%{x:.2f}<br>Density: %{y:.3f}<extra></extra>"))
         i_star = int(np.argmax(z_row))
-        fig_right.add_trace(go.Scatter(
-            x=[K_grid[i_star]], y=[z_row[i_star]],
-            mode="markers", name="Peak",
-            marker=dict(size=9, color="crimson"),
-            hovertemplate="Peak<br>Strike: $%{x:.2f}<br>Density: %{y:.3f}<extra></extra>"
-        ))
-        fig_right.update_layout(
-            title=f"RND slice at {exp_dates[sel_idx]}",
-            xaxis_title="Strike (K)",
-            yaxis_title="Risk-neutral density (normalized)",
-            template="plotly_white",
-            height=420
-        )
+        fig_right.add_trace(go.Scatter(x=[K_grid[i_star]], y=[z_row[i_star]], mode="markers", name="Peak",
+                                       marker=dict(size=9, color="crimson"),
+                                       hovertemplate="Peak<br>Strike: $%{x:.2f}<br>Density: %{y:.3f}<extra></extra>"))
+        fig_right.update_layout(title=f"RND slice at {exp_dates[sel_idx]}", xaxis_title="Strike (K)",
+                                yaxis_title="Risk-neutral density (normalized)", template="plotly_white", height=420)
         st.plotly_chart(fig_right, use_container_width=True)
 
-# ======================= End of app.py =======================
+# ====================== Router ======================
+if choice == "Price chart":
+    render_price_section()
+elif choice == "Comparable performance":
+    render_comparable_section()
+else:
+    render_rnd_section()
