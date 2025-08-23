@@ -7,10 +7,10 @@ import plotly.graph_objs as go
 from datetime import date, timedelta
 
 # ============================== Page ==============================
-st.set_page_config(page_title="Apple (AAPL) Dashboard", layout="wide")
+st.set_page_config(page_title="Copart (CPRT) Dashboard", layout="wide")
 st.title("Stock Price Chart")
 
-TICKER = "AAPL"
+TICKER = "CPRT"
 today = date.today()
 
 # ======================= Session defaults ========================
@@ -194,8 +194,8 @@ st.markdown(
 # =================================================================
 st.header("Comparable performance")
 COMPARATORS = {
-    "SPX": "^GSPC", "QQQ (Tech ETF)": "QQQ", "AMZN": "AMZN",
-    "GOOGL": "GOOGL", "META": "META", "NVDA": "NVDA", "TSLA": "TSLA",
+    "S&P 500": "^GSPC", "S&P Industrial ETF": "XLI", "Cintas": "CTAS",
+    "Ritchie Bros.": "RBA", "Global Payments": "GPN", "TRI": "Thomson Reuters", "UL Solutions": "ULS",
 }
 choices = st.multiselect("Compare against (multi-select):", options=list(COMPARATORS.keys()), default=[])
 
@@ -239,7 +239,7 @@ else:
     st.plotly_chart(pfig, use_container_width=True)
 
 # =================================================================
-#                 Risk-neutral density (3D) surface — AAPL options
+#                 Risk-neutral density (3D) surface — CPRT options
 # =================================================================
 st.header("Risk-neutral density (3D)")
 cA,cB,cC,cD = st.columns([1.4,1.4,1.4,2.2])
@@ -317,7 +317,7 @@ def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
     if not chains:
         return None
 
-    # adaptive strike window (wider for AAPL)
+    # adaptive strike window (wider for CPRT)
     Kmin = float(np.percentile(K_all, 1))
     Kmax = float(np.percentile(K_all, 99))
     if S0:
@@ -388,7 +388,7 @@ def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
         return None
     return K_grid, T_days_arr, Z, exp_dates
 
-with st.spinner("Estimating risk-neutral density from AAPL options…"):
+with st.spinner("Estimating risk-neutral density from CPRT options…"):
     rnd = get_rnd_surface(TICKER, n_exp, n_strikes, rf_pct)
 
 if rnd is None:
