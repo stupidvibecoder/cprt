@@ -1,3 +1,4 @@
+aapl:
 1. company factors (micro):
   - earnings/guidance
     - fwd guidance
@@ -13,7 +14,7 @@
   - competition 
     - market share
   - regulation & legal
-3. market-wide forces (macro)
+3. market-wide forces (macro):
   - interest rates & inflation
     - ^ rates => lower the PV of future fcfs
     - fed meetings, CPI, unemployment data
@@ -21,8 +22,25 @@
     - trade/FX/tariffs
     - recession
   - etf flow
-4. market structure/flow factors
+4. market structure/flow factors:
   - gamma flows
   - hedge fund positioning
   - retail sentiment
-   
+
+cprt:
+1. company factors (micro)
+  - auction volumes
+    - vehicles sold is the lifeblood
+      - driven by insurance write-offs (accidents, weather events, & total lossses)
+  - take rate/fee growth 
+    - higher service fees => margin expansion
+  - geographic expansion
+    - us core -> growth into germany, uk, spain, & brazil
+  - new yard openings = capacity => higher future volumes
+  - technology/platform
+    - digital auctions, bidding algorithms, ai for damage assessment
+    - more buyers from emerging markets => higher demand for salvaged cars
+  - balance sheet strength
+    - no debt, strong fcfs, large land bank
+    - conservative model is prized
+2. 
