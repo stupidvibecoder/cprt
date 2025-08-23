@@ -194,7 +194,7 @@ st.markdown(
 st.header("Comparable performance")
 COMPARATORS = {
     "S&P 500": "^GSPC", "S&P Industrial ETF": "XLI", "Cintas": "CTAS",
-    "Ritchie Bros.": "RBA", "Global Payments": "GPN", "UL Solutions": "ULS",
+    "Ritchie Bros.": "RBA", "Global Payments": "GPN", "TRI": "Thomson Reuters", "UL Solutions": "ULS",
 }
 choices = st.multiselect("Compare against (multi-select):", options=list(COMPARATORS.keys()), default=[])
 
@@ -209,10 +209,10 @@ def fetch_close_series(sym: str, s: date, e: date, interval: str):
 
 cprt_close = fetch_close_series(TICKER, st.session_state.start_date, st.session_state.end_date, interval)
 if cprt_close is None or cprt_close.empty:
-    st.warning("No CPRT data for the selected range.")
+    st.warning("No cprt data for the selected range.")
 else:
     base = float(cprt_close.iloc[0])
-    df_pct = pd.DataFrame({"CPRT": (cprt_close/base - 1)*100})
+    df_pct = pd.DataFrame({"cprt": (cprt_close/base - 1)*100})
     for lab in choices:
         sym = COMPARATORS[lab]
         srs = fetch_close_series(sym, st.session_state.start_date, st.session_state.end_date, interval)
@@ -221,7 +221,7 @@ else:
         df_pct[lab] = (srs/float(srs.iloc[0]) - 1)*100
 
     pfig = go.Figure()
-    pfig.add_trace(go.Scatter(x=df_pct.index, y=df_pct["CPRT"], mode="lines",
+    pfig.add_trace(go.Scatter(x=df_pct.index, y=df_pct["cprt"], mode="lines",
                               name="cprt", connectgaps=True,
                               hovertemplate="Date: %{x}<br>Change: %{y:.2f}%<extra></extra>"))
     for lab in [c for c in df_pct.columns if c!="cprt"]:
