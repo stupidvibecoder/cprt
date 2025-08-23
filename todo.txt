@@ -2,7 +2,7 @@
   - earnings/guidance
     - fwd guidance
     - earnings calls and analyst revisions
-  - product launches/innovation
+  - product launches/innovation/expansion
   - capital allocation
     - buybacks/dividends
     - debt issuance
