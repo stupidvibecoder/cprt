@@ -253,7 +253,8 @@ def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
     """
     Build strike×maturity surface of risk-neutral density from call prices.
     Uses local cubic fits for stable second derivatives; falls back to butterfly FD.
-    Returns: K_grid (nK,), T_days (nExp, in days), Z (nExp x nK) normalized to [0,1].
+    Returns:
+        K_grid (nK,), T_days (nExp, in days), Z (nExp x nK) normalized to [0,1], exp_dates (list of date)
     """
     t = yf.Ticker(ticker)
     expiries_raw = getattr(t, "options", [])
@@ -341,7 +342,7 @@ def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
         return out
 
     r = float(r_annual)/100.0
-    T_days_list, Z_rows = [], []
+    T_days_list, Z_rows, exp_kept = [], [], []
     for ed, df in chains.items():
         Kraw = df["strike"].to_numpy()
         Craw = df["callPrice"].to_numpy()
@@ -366,24 +367,26 @@ def get_rnd_surface(ticker: str, n_expiries: int, nK: int, r_annual: float):
         T = T_days / 365.25                 # years for discounting only
         q = np.exp(r*T) * Cpp
         q = np.clip(q, 0.0, None)   # BL density >= 0
-        Z_rows.append(q); T_days_list.append(T_days)
+
+        Z_rows.append(q); T_days_list.append(T_days); exp_kept.append(ed)
 
     if not Z_rows:
         return None
 
     Z = np.array(Z_rows)                 # (nExp, nK)
     T_days_arr = np.array(T_days_list)   # maturity axis in days
+    exp_dates = np.array(exp_kept, dtype="object")
 
     # sort by maturity & normalize to [0,1]
     order = np.argsort(T_days_arr)
-    T_days_arr = T_days_arr[order]; Z = Z[order,:]
+    T_days_arr = T_days_arr[order]; Z = Z[order,:]; exp_dates = exp_dates[order]
     zmax = float(np.nanmax(Z))
     if zmax > 0: Z = Z / zmax
     else:       Z = np.zeros_like(Z)
 
     if Z.shape[0] < 2 or Z.shape[1] < 2:
         return None
-    return K_grid, T_days_arr, Z
+    return K_grid, T_days_arr, Z, exp_dates
 
 with st.spinner("Estimating risk-neutral density from AAPL options…"):
     rnd = get_rnd_surface(TICKER, n_exp, n_strikes, rf_pct)
@@ -391,7 +394,7 @@ with st.spinner("Estimating risk-neutral density from AAPL options…"):
 if rnd is None:
     st.warning("Could not build the RND surface (insufficient option data). Try fewer expiries or a smaller grid.")
 else:
-    K_grid, T_days, Z = rnd
+    K_grid, T_days, Z, exp_dates = rnd
     X, Y = np.meshgrid(K_grid, T_days)  # Y now in DAYS
 
     colorscale = [
@@ -419,8 +422,84 @@ else:
 
     st.caption(
         "RND via Breeden–Litzenberger: q(K,T) = e^{rT} · ∂²C/∂K². "
-        "We use local cubic fits (stable with sparse strikes) with a butterfly fallback, "
-        "clip negatives, and normalize to [0,1]. Maturity axis is shown in days."
+        "We use local cubic fits with butterfly fallback, clip negatives, normalize to [0,1]. Maturity axis in days."
     )
+
+    # =================================================================
+    #                    NEW: Two 2D views under the 3D
+    # =================================================================
+    st.subheader("RND cross-sections")
+
+    left, right = st.columns(2)
+
+    # ------- Left: maturity (days) vs argmax strike ("Option Market Price Estimate")
+    with left:
+        tf_opts = {
+            "All maturities": None,
+            "0–30 days": 30,
+            "0–60 days": 60,
+            "0–90 days": 90,
+            "0–180 days": 180,
+            "0–365 days": 365,
+        }
+        sel_tf = st.selectbox("Timeframe (x-axis filter):", list(tf_opts.keys()), index=0)
+        limit = tf_opts[sel_tf]
+
+        # find strike of max density per expiry row
+        idx_max = np.argmax(Z, axis=1)            # (nExp,)
+        K_star = K_grid[idx_max]                  # strike at max density
+        T_plot = T_days.copy()
+        K_plot = K_star.copy()
+
+        if limit is not None:
+            mask = T_plot <= limit
+            T_plot = T_plot[mask]
+            K_plot = K_plot[mask]
+
+        fig_left = go.Figure()
+        fig_left.add_trace(go.Scatter(
+            x=T_plot, y=K_plot, mode="lines+markers",
+            name="Max-density strike",
+            hovertemplate="Maturity: %{x}d<br>Strike: $%{y:.2f}<extra></extra>"
+        ))
+        fig_left.update_layout(
+            title="Option Market Price Estimate",
+            xaxis_title="Maturity (days)",
+            yaxis_title="Strike with highest RND (K*)",
+            template="plotly_white",
+            height=420
+        )
+        st.plotly_chart(fig_left, use_container_width=True)
+
+    # ------- Right: strike vs density for a chosen single expiry
+    with right:
+        # Build a label list like "2025-09-19 (28d)"
+        labels = [f"{d} ({int(t)}d)" for d, t in zip(exp_dates, T_days)]
+        sel_label = st.selectbox("Expiry to slice:", labels, index=0)
+        sel_idx = labels.index(sel_label)
+
+        z_row = Z[sel_idx, :]
+        fig_right = go.Figure()
+        fig_right.add_trace(go.Scatter(
+            x=K_grid, y=z_row, mode="lines",
+            name=str(exp_dates[sel_idx]),
+            hovertemplate="Strike: $%{x:.2f}<br>Density: %{y:.3f}<extra></extra>"
+        ))
+        # mark the max point on this curve
+        i_star = int(np.argmax(z_row))
+        fig_right.add_trace(go.Scatter(
+            x=[K_grid[i_star]], y=[z_row[i_star]],
+            mode="markers", name="Peak",
+            marker=dict(size=9, color="crimson"),
+            hovertemplate="Peak<br>Strike: $%{x:.2f}<br>Density: %{y:.3f}<extra></extra>"
+        ))
+        fig_right.update_layout(
+            title=f"RND slice at {exp_dates[sel_idx]}",
+            xaxis_title="Strike (K)",
+            yaxis_title="Risk-neutral density (normalized)",
+            template="plotly_white",
+            height=420
+        )
+        st.plotly_chart(fig_right, use_container_width=True)
 
 # ======================= End of app.py =======================
