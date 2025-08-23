@@ -208,12 +208,12 @@ def fetch_close_series(sym: str, s: date, e: date, interval: str):
         srs.index = srs.index.tz_convert(None)
     return srs
 
-aapl_close = fetch_close_series(TICKER, st.session_state.start_date, st.session_state.end_date, interval)
-if aapl_close is None or aapl_close.empty:
-    st.warning("No AAPL data for the selected range.")
+cprt_close = fetch_close_series(TICKER, st.session_state.start_date, st.session_state.end_date, interval)
+if cprt_close is None or cprt_close.empty:
+    st.warning("No cprt data for the selected range.")
 else:
-    base = float(aapl_close.iloc[0])
-    df_pct = pd.DataFrame({"AAPL": (aapl_close/base - 1)*100})
+    base = float(cprt_close.iloc[0])
+    df_pct = pd.DataFrame({"cprt": (cprt_close/base - 1)*100})
     for lab in choices:
         sym = COMPARATORS[lab]
         srs = fetch_close_series(sym, st.session_state.start_date, st.session_state.end_date, interval)
@@ -222,10 +222,10 @@ else:
         df_pct[lab] = (srs/float(srs.iloc[0]) - 1)*100
 
     pfig = go.Figure()
-    pfig.add_trace(go.Scatter(x=df_pct.index, y=df_pct["AAPL"], mode="lines",
-                              name="AAPL", connectgaps=True,
+    pfig.add_trace(go.Scatter(x=df_pct.index, y=df_pct["cprt"], mode="lines",
+                              name="cprt", connectgaps=True,
                               hovertemplate="Date: %{x}<br>Change: %{y:.2f}%<extra></extra>"))
-    for lab in [c for c in df_pct.columns if c!="AAPL"]:
+    for lab in [c for c in df_pct.columns if c!="cprt"]:
         pfig.add_trace(go.Scatter(x=df_pct.index, y=df_pct[lab], mode="lines",
                                   name=lab, connectgaps=True,
                                   hovertemplate="Date: %{x}<br>Change: %{y:.2f}%<extra></extra>"))
