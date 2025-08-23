@@ -221,7 +221,7 @@ else:
         df_pct[lab] = (srs/float(srs.iloc[0]) - 1)*100
 
     pfig = go.Figure()
-    pfig.add_trace(go.Scatter(x=df_pct.index, y=df_pct["cprt"], mode="lines",
+    pfig.add_trace(go.Scatter(x=df_pct.index, y=df_pct["CPRT"], mode="lines",
                               name="cprt", connectgaps=True,
                               hovertemplate="Date: %{x}<br>Change: %{y:.2f}%<extra></extra>"))
     for lab in [c for c in df_pct.columns if c!="cprt"]:
