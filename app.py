@@ -213,7 +213,7 @@ st.header("Comparable performance")
 
 COMPARATORS = {
     "SPX": "^GSPC", "OPENLANE": "KAR", "Ritchie Bros.": "RBA",
-    "UniFirst": "UNF", "CarMax": "KMX", "Carvana": "CVNA", "Cintas": "CTAS",
+    "UniFirst": "UNF", "CarMax": "KMX", "Carvana": "CVNA", "Industrials ETF": "IYJ",
 }
 choices = st.multiselect("Compare against (multi-select):", options=list(COMPARATORS.keys()), default=[])
 
