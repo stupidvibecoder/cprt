@@ -212,8 +212,8 @@ st.markdown(
 st.header("Comparable performance")
 
 COMPARATORS = {
-    "SPX": "^GSPC", "QQQ (Tech ETF)": "QQQ", "AMZN": "AMZN",
-    "GOOGL": "GOOGL", "META": "META", "NVDA": "NVDA", "TSLA": "TSLA",
+    "SPX": "^GSPC", "OPENLANE": "KAR", "Ritchie Bros.": "RBA",
+    "UniFirst": "UNF", "CarMax": "KMX", "Carvana": "CVNA", "Cintas": "CTAS",
 }
 choices = st.multiselect("Compare against (multi-select):", options=list(COMPARATORS.keys()), default=[])
 
