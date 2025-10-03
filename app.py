@@ -483,3 +483,64 @@ else:
             template="plotly_white", height=420
         )
         st.plotly_chart(fig_right, use_container_width=True)
+        # ================== INTRINSIC VALUATION TOOL (Section 4) ==================
+st.header("Intrinsic Valuation — Reverse DCF")
+
+with st.expander("Reverse DCF Calculator"):
+    c1, c2, c3 = st.columns(3)
+    market_cap = c1.number_input("Market Cap ($B)", value=40.0, step=1.0, min_value=1.0) * 1e9
+    shares_out = c2.number_input("Shares Outstanding (B)", value=1.0, step=0.1, min_value=0.01) * 1e9
+    discount_rate = c3.number_input("Discount Rate (%)", value=9.0, step=0.5, min_value=2.0, max_value=20.0) / 100.0
+
+    c4, c5, c6 = st.columns(3)
+    terminal_growth = c4.number_input("Terminal Growth (%)", value=2.0, step=0.25, min_value=0.0, max_value=6.0) / 100.0
+    fcf_margin = c5.number_input("FCF Margin (%)", value=15.0, step=1.0, min_value=1.0, max_value=50.0) / 100.0
+    horizon = c6.slider("Projection Horizon (yrs)", min_value=5, max_value=20, value=10)
+
+    # Current revenue proxy
+    revenue_now = st.number_input("Current Revenue ($B)", value=4.0, step=0.5, min_value=0.1) * 1e9
+
+    st.markdown("This tool solves for the **implied CAGR of revenue** over the horizon that justifies today’s market cap under your assumptions.")
+
+    import numpy_financial as npf
+
+    def implied_growth_rate(Mcap, Rev0, margin, r, g, T):
+        """
+        Solve for CAGR of revenue such that PV(FCFs) = Mcap
+        """
+        def pv_diff(cagr):
+            revs = [Rev0 * ((1+cagr)**t) for t in range(1, T+1)]
+            fcfs = [rev * margin for rev in revs]
+            # discount FCFs
+            pv_fcfs = sum(f / ((1+r)**t) for t,f in enumerate(fcfs, start=1))
+            # terminal value
+            TV = fcfs[-1] * (1+g) / (r-g)
+            pv_TV = TV / ((1+r)**T)
+            return pv_fcfs + pv_TV - Mcap
+        # crude binary search for CAGR
+        lo, hi = -0.5, 0.5
+        for _ in range(60):
+            mid = (lo+hi)/2
+            if pv_diff(mid) > 0:
+                hi = mid
+            else:
+                lo = mid
+        return (lo+hi)/2
+
+    implied_cagr = implied_growth_rate(market_cap, revenue_now, fcf_margin, discount_rate, terminal_growth, horizon)
+
+    st.metric("Implied Revenue CAGR", f"{implied_cagr*100:.2f}%")
+    st.caption("This is the revenue CAGR required for the present value of projected FCFs to equal today’s market cap.")
+
+    # Optional visualization
+    import matplotlib.pyplot as plt
+    import numpy as np
+    revs = [revenue_now * ((1+implied_cagr)**t) for t in range(horizon+1)]
+    years = list(range(horizon+1))
+    plt.figure(figsize=(6,3))
+    plt.plot(years, np.array(revs)/1e9, marker="o")
+    plt.title("Revenue Path Implied by Reverse DCF")
+    plt.xlabel("Year")
+    plt.ylabel("Revenue ($B)")
+    st.pyplot(plt)
+
